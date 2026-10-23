@@ -2,10 +2,16 @@ package com.example.umiumchat
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -13,10 +19,14 @@ import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
 import android.text.InputType
 import android.text.SpannableStringBuilder
 import android.text.Spanned
@@ -50,7 +60,7 @@ private val LANGS = listOf("Русский", "English", "Español", "Deutsch", "
 
 private fun l(vararg s: String) = s.toList()
 
-// Порядок переводов совпадает с LANGS. Новые ключи заполнены на русском и английском.
+// Порядок переводов совпадает с LANGS. Если перевода нет, показывается английский.
 private val S: Map<String, List<String>> = mapOf(
     "chats" to l("Чаты", "Chats", "Chats", "Chats", "Discussions", "Conversas", "聊天", "チャット", "Sohbetler", "Чати"),
     "archive" to l("Архив", "Archive", "Archivo", "Archiv", "Archives", "Arquivo", "归档", "アーカイブ", "Arşiv", "Архів"),
@@ -58,7 +68,7 @@ private val S: Map<String, List<String>> = mapOf(
     "settings" to l("Настройки", "Settings", "Ajustes", "Einstellungen", "Paramètres", "Configurações", "设置", "設定", "Ayarlar", "Налаштування"),
     "folders" to l("Папки с чатами", "Chat folders", "Carpetas", "Chat-Ordner", "Dossiers", "Pastas", "聊天文件夹", "チャットフォルダー", "Sohbet klasörleri", "Папки з чатами"),
     "language" to l("Язык", "Language", "Idioma", "Sprache", "Langue", "Idioma", "语言", "言語", "Dil", "Мова"),
-    "search_title" to l("Поиск по @юзу", "Search by @username", "Buscar por @usuario", "Suche nach @Name", "Recherche par @pseudo", "Pesquisa por @usuário", "按 @用户名 搜索", "@ユーザー名で検索", "@kullanıcı adıyla ara", "Пошук за @юзом"),
+    "search_title" to l("Поиск по ID", "Search by ID", "Buscar por ID", "Suche nach ID", "Recherche par ID", "Pesquisa por ID", "按 ID 搜索", "IDで検索", "ID ile ara", "Пошук за ID"),
     "search_hint" to l("Введите ID (6 цифр)", "Enter 6-digit ID", "Escribe el ID (6 cifras)", "6-stellige ID eingeben", "Saisissez l'ID (6 chiffres)", "Digite o ID (6 dígitos)", "输入6位ID", "6桁のIDを入力", "6 haneli ID girin", "Введіть ID (6 цифр)"),
     "find" to l("Найти", "Find", "Buscar", "Finden", "Trouver", "Encontrar", "查找", "検索", "Bul", "Знайти"),
     "not_found" to l("не найден рядом", "not found nearby", "no encontrado cerca", "nicht in der Nähe", "introuvable à proximité", "não encontrado por perto", "附近未找到", "近くに見つかりません", "yakında bulunamadı", "не знайдено поруч"),
@@ -160,21 +170,52 @@ private val S: Map<String, List<String>> = mapOf(
     "banned_n" to l("Забанено", "Banned"),
     "admins_n" to l("Админов", "Admins"),
     "users" to l("Все известные пользователи", "All known users"),
-    "tap_change" to l("нажмите, чтобы сменить ID", "tap to change ID"),
     "banned_tag" to l("забанен", "banned"),
     "ban" to l("Забанить", "Ban"),
     "unban" to l("Разбанить", "Unban"),
     "make_admin" to l("Сделать админом", "Make admin"),
     "revoke_admin" to l("Снять админку", "Remove admin"),
     "change_id" to l("Сменить ID", "Change ID"),
-    "kick" to l("Отключить от сети", "Disconnect"),
     "new_id" to l("Новый ID (6 цифр)", "New ID (6 digits)"),
     "id_format" to l("ID — ровно 6 цифр", "ID must be exactly 6 digits"),
     "id_taken" to l("Такой ID уже занят", "This ID is taken"),
     "you_banned" to l("Вы заблокированы администратором", "An admin banned you"),
     "admin_granted" to l("Вы стали администратором", "You are now an admin"),
-    "leave_admin" to l("Выйти из админ-режима", "Leave admin mode")
+    "leave_admin" to l("Выйти из админ-режима", "Leave admin mode"),
+    "hide_offline" to l("Отключить от сети", "Set offline"),
+    "show_online" to l("Включить в сети", "Set online"),
+    "hidden_tag" to l("скрыт (не в сети)", "hidden (offline)"),
+    "banned_banner" to l("Вы заблокированы администратором. Сообщения не отправляются.", "An admin banned you. Messages can't be sent."),
+    "hidden_banner" to l("Администратор отключил ваш статус в сети.", "An admin set you offline."),
+    "notif_channel" to l("Сообщения", "Messages"),
+    "no_link_photo" to l("Нет связи. Фото можно отправить, когда собеседник будет рядом.", "No connection. You can send the photo when they're nearby.")
 )
+
+// Фоновый сервис: держит приложение живым, пока оно свёрнуто, чтобы приходили сообщения и уведомления
+class MeshService : Service() {
+    override fun onCreate() {
+        super.onCreate()
+        val nm = getSystemService(NotificationManager::class.java)
+        if (nm.getNotificationChannel("mesh") == null) {
+            nm.createNotificationChannel(NotificationChannel("mesh", "BLEmess", NotificationManager.IMPORTANCE_MIN))
+        }
+        val n = Notification.Builder(this, "mesh")
+            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+            .setContentTitle("BLEmess")
+            .setContentText("Работает в фоне и принимает сообщения")
+            .setOngoing(true)
+            .build()
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        } else {
+            startForeground(1, n)
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+
+    override fun onBind(intent: Intent?): IBinder? = null
+}
 
 class MainActivity : Activity() {
 
@@ -194,7 +235,9 @@ class MainActivity : Activity() {
         val fwd: String = "",
         var unread: Boolean = false,
         val img: String = "",
-        val time: Long = System.currentTimeMillis()
+        val time: Long = System.currentTimeMillis(),
+        var delivered: Boolean = false,
+        var pkt: String = ""
     )
 
     private class Btn(val text: String, val color: Int, val action: () -> Unit)
@@ -202,10 +245,12 @@ class MainActivity : Activity() {
     private val serviceId = "com.example.umiumchat"
     private val prefs by lazy { getSharedPreferences("blemess", Context.MODE_PRIVATE) }
     private val client by lazy { Nearby.getConnectionsClient(this) }
+    private val handler = Handler(Looper.getMainLooper())
     private val walls = listOf("", "#D6EAF8", "#E5DDD5", "#D5F5E3", "#2C3E50")
 
     private var myId = ""
     private var unlocked = false
+    private var foreground = false
     private var screen = Screen.CHATS
     private var openPeer = ""
     private var archiveView = false
@@ -216,10 +261,12 @@ class MainActivity : Activity() {
     private var animateLast = false
     private var pressTaps = 0
     private var lastDown = 0L
+    private var downAt = 0L
     private var pressRunnable: Runnable? = null
 
-    private val nearby = mutableMapOf<String, String>()     // endpointId -> ID
-    private val links = mutableMapOf<String, String>()      // endpointId -> ID (связь есть)
+    private val nearby = mutableMapOf<String, String>()   // endpointId -> ID (кто виден рядом)
+    private val names = mutableMapOf<String, String>()    // endpointId -> ID (до потери из виду)
+    private val links = mutableMapOf<String, String>()    // endpointId -> ID (связь установлена)
     private val pending = mutableSetOf<String>()
     private val seen = HashSet<String>()
     private val chats = LinkedHashMap<String, MutableList<Msg>>()
@@ -253,7 +300,6 @@ class MainActivity : Activity() {
         return arr.getOrElse(lang) { arr.getOrElse(1) { arr[0] } }
     }
 
-    // ---------- Цвета ----------
     private fun mix(a: Int, b: Int, f: Float): Int = Color.rgb(
         (Color.red(a) + (Color.red(b) - Color.red(a)) * f).toInt(),
         (Color.green(a) + (Color.green(b) - Color.green(a)) * f).toInt(),
@@ -275,20 +321,30 @@ class MainActivity : Activity() {
     private val chipOff get() = if (dark) Color.parseColor("#232E3C") else Color.parseColor("#E6E8EB")
     private val rowBg get() = if (glass) Color.TRANSPARENT else bg
 
+    // Периодически пробуем переотправить сообщения, которые ещё не доставлены
+    private val retryTick = object : Runnable {
+        override fun run() {
+            resendUndelivered()
+            handler.postDelayed(this, 10000L)
+        }
+    }
+
     // ---------- Жизненный цикл ----------
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         myId = prefs.getString("uid", null) ?: newId()
         loadChats()
-        requestPermissions(
-            arrayOf(
-                "android.permission.ACCESS_FINE_LOCATION",
-                "android.permission.BLUETOOTH_SCAN",
-                "android.permission.BLUETOOTH_ADVERTISE",
-                "android.permission.BLUETOOTH_CONNECT",
-                "android.permission.NEARBY_WIFI_DEVICES"
-            ), 1
+        val perms = mutableListOf(
+            "android.permission.ACCESS_FINE_LOCATION",
+            "android.permission.BLUETOOTH_SCAN",
+            "android.permission.BLUETOOTH_ADVERTISE",
+            "android.permission.BLUETOOTH_CONNECT",
+            "android.permission.NEARBY_WIFI_DEVICES"
         )
+        if (Build.VERSION.SDK_INT >= 33) perms.add("android.permission.POST_NOTIFICATIONS")
+        requestPermissions(perms.toTypedArray(), 1)
+        startForegroundService(Intent(this, MeshService::class.java))
+        handler.postDelayed(retryTick, 10000L)
         if (pinSet()) {
             showLock()
         } else {
@@ -316,11 +372,22 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        foreground = true
+    }
+
+    override fun onPause() {
+        foreground = false
+        super.onPause()
+    }
+
+    // Кнопка «назад» сворачивает приложение, связь и приём сообщений продолжают работать
     override fun onBackPressed() {
-        if (!unlocked) { super.onBackPressed(); return }
+        if (!unlocked) { moveTaskToBack(true); return }
         if (drawerOpen) { closeDrawer(); return }
         when (screen) {
-            Screen.CHATS -> if (archiveView) { archiveView = false; go(Screen.CHATS) } else super.onBackPressed()
+            Screen.CHATS -> if (archiveView) { archiveView = false; go(Screen.CHATS) } else moveTaskToBack(true)
             Screen.CHAT, Screen.PROFILE, Screen.SETTINGS, Screen.SEARCH -> go(Screen.CHATS)
             Screen.BLACKLIST -> go(Screen.PRIVACY)
             Screen.APPEARANCE -> go(Screen.CHAT_SETTINGS)
@@ -329,8 +396,12 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
         saveChats()
-        stopMesh()
+        if (isFinishing) {
+            stopMesh()
+            stopService(Intent(this, MeshService::class.java))
+        }
         super.onDestroy()
     }
 
@@ -598,6 +669,17 @@ class MainActivity : Activity() {
         tv.textSize = 15f
         tv.gravity = Gravity.CENTER
         tv.setPadding(dp(32), dp(60), dp(32), dp(32))
+        return tv
+    }
+
+    private fun banner(text: String): TextView {
+        val tv = TextView(this)
+        tv.text = text
+        tv.setTextColor(textColor)
+        tv.textSize = 14f
+        tv.setPadding(dp(14), dp(10), dp(14), dp(10))
+        tv.background = panel(if (dark) Color.parseColor("#3A2E1E") else Color.parseColor("#FFF3D6"), dp(12).toFloat())
+        tv.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(12), dp(8), dp(12), dp(4)) }
         return tv
     }
 
@@ -897,6 +979,8 @@ class MainActivity : Activity() {
                    else Btn("☰", Color.TRANSPARENT) { openDrawer() }
         val right = Btn("🔍", Color.TRANSPARENT) { go(Screen.SEARCH) }
         page(if (archiveView) t("archive") else "BLEmess", left = left, right = right) { c ->
+            if (banned().contains(myId)) c.addView(banner(t("banned_banner")))
+            else if (hidden().contains(myId)) c.addView(banner(t("hidden_banner")))
             if (!archiveView) c.addView(folderChips())
             val list = LinearLayout(this)
             list.orientation = LinearLayout.VERTICAL
@@ -1179,11 +1263,8 @@ class MainActivity : Activity() {
         val text = field.text.toString().trim()
         if (text.isEmpty()) return
         val editing = editingId
-        if (editing != null) {
-            editMessage(openPeer, editing, text)
-        } else {
-            sendMessage(openPeer, text, replyPreview, "")
-        }
+        if (editing != null) editMessage(openPeer, editing, text)
+        else sendMessage(openPeer, text, replyPreview, "")
         field.setText("")
         editingId = null
         replyPreview = ""
@@ -1265,7 +1346,7 @@ class MainActivity : Activity() {
 
         val meta = TextView(this)
         val time = if (showTime) timeOf(m.time) else ""
-        val ticks = if (m.mine) (if (m.read) " ✓✓" else " ✓") else ""
+        val ticks = if (m.mine) (if (m.read || m.delivered) " ✓✓" else " ✓") else ""
         meta.text = time + ticks
         meta.setTextColor(if (m.mine && m.read) Color.parseColor("#4FC3F7") else subColor)
         meta.textSize = 11f
@@ -1342,6 +1423,8 @@ class MainActivity : Activity() {
         if (!m.mine) return
         m.text = text
         m.edited = true
+        // Если сообщение ещё не доставлено, в повторной отправке должен быть новый текст
+        if (!m.delivered && m.pkt.isNotEmpty()) m.pkt = JSONObject(m.pkt).put("text", text).toString()
         sendPacket(newPacket("edit", peer).put("target", id).put("text", text))
         refreshLive()
     }
@@ -1387,6 +1470,7 @@ class MainActivity : Activity() {
     }
 
     private fun sendPhotoFile(peer: String, file: File, fwd: String, reply: String) {
+        if (links.isEmpty()) { toast(t("no_link_photo")); return }
         try {
             val fp = Payload.fromFile(file)
             val p = newPacket("photo", peer)
@@ -1397,8 +1481,7 @@ class MainActivity : Activity() {
                 reply = reply, fwd = fwd, img = file.absolutePath))
             animateLast = true
             sendPacket(p)
-            val targets = links.keys.toList()
-            if (targets.isNotEmpty()) client.sendPayload(targets, fp)
+            client.sendPayload(links.keys.toList(), fp)
             refreshLive()
         } catch (e: Exception) {
             toast(t("net_err"))
@@ -1455,7 +1538,7 @@ class MainActivity : Activity() {
                 val q = find.text.toString().trim()
                 if (q.isEmpty()) return@setOnClickListener
                 val found = (nearby.values + chats.keys).firstOrNull { it == q }
-                if (found != null) openChat(found) else toast("@$q ${t("not_found")}")
+                if (found != null) openChat(found) else toast("$q ${t("not_found")}")
             }
             c.addView(findBtn, LinearLayout.LayoutParams(-1, -2).apply {
                 leftMargin = dp(16); rightMargin = dp(16); topMargin = dp(8)
@@ -1488,9 +1571,8 @@ class MainActivity : Activity() {
             addSeparator(box)
         }
     }
-    // ---------- Настройки ----------
-    private var downAt = 0L
 
+    // ---------- Настройки ----------
     private fun buildSettings() {
         page(t("settings")) { c ->
             addRow(c, navRow(t("account")) { go(Screen.ACCOUNT) })
@@ -1511,7 +1593,7 @@ class MainActivity : Activity() {
         }
     }
 
-    // Один быстрый тап, затем удержание второго нажатия открывает окно с кодом
+    // Два нажатия, второе удержать: открывает окно с кодом админа
     private fun secretTouch(v: View) {
         v.setOnTouchListener { view, e ->
             when (e.action) {
@@ -1519,12 +1601,7 @@ class MainActivity : Activity() {
                     downAt = System.currentTimeMillis()
                     if (downAt - lastDown > 1200) pressTaps = 0
                     pressRunnable?.let { view.removeCallbacks(it) }
-                    val r = Runnable {
-                        if (pressTaps >= 1) {
-                            pressTaps = 0
-                            adminCodeDialog()
-                        }
-                    }
+                    val r = Runnable { checkSecret() }
                     pressRunnable = r
                     view.postDelayed(r, 500)
                 }
@@ -1539,6 +1616,13 @@ class MainActivity : Activity() {
                 }
             }
             true
+        }
+    }
+
+    private fun checkSecret() {
+        if (pressTaps >= 1) {
+            pressTaps = 0
+            adminCodeDialog()
         }
     }
 
@@ -1568,7 +1652,7 @@ class MainActivity : Activity() {
     }
 
     private fun knownIds(): List<String> {
-        val others = (chats.keys + nearby.values + links.values + admins() + banned())
+        val others = (chats.keys + nearby.values + links.values + admins() + banned() + hidden())
             .filter { it != myId }
             .distinct()
             .sorted()
@@ -1585,13 +1669,13 @@ class MainActivity : Activity() {
                 val tags = listOfNotNull(
                     if (admins().contains(id)) t("is_admin") else null,
                     if (banned().contains(id)) t("banned_tag") else null,
+                    if (hidden().contains(id)) t("hidden_tag") else null,
                     if (online(id)) t("online") else null
                 ).joinToString(" · ")
                 addRow(c, navRow(nameSpan(id), tags) { v -> userAdminPopup(v, id) })
             }
             addRow(c, navRow(t("leave_admin"), "", danger = true) {
-                applyAdmin("admin", myId, "off")
-                sendAdminCmd("admin", myId, "off")
+                adminDo("admin", myId, "off")
                 go(Screen.SETTINGS)
             })
         }
@@ -1600,11 +1684,12 @@ class MainActivity : Activity() {
     private fun userAdminPopup(anchor: View, id: String) {
         val isBanned = banned().contains(id)
         val isAdm = admins().contains(id)
+        val isHidden = hidden().contains(id)
         val items = listOf(
             (if (isBanned) t("unban") else t("ban")) to { adminDo("ban", id, if (isBanned) "off" else "on") },
             (if (isAdm) t("revoke_admin") else t("make_admin")) to { adminDo("admin", id, if (isAdm) "off" else "on") },
-            t("change_id") to { changeIdDialog(id) },
-            t("kick") to { adminDo("kick", id, "") }
+            (if (isHidden) t("show_online") else t("hide_offline")) to { adminDo("hide", id, if (isHidden) "off" else "on") },
+            t("change_id") to { changeIdDialog(id) }
         )
         popup(anchor, items)
     }
@@ -1818,7 +1903,7 @@ class MainActivity : Activity() {
         go(Screen.FOLDERS)
     }
 
-    // ---------- Настройки в памяти телефона ----------
+    // ---------- Хранение настроек и списков ----------
     private fun setInt(key: String, v: Int) { prefs.edit().putInt(key, v).apply() }
     private fun setStr(key: String, v: String) { prefs.edit().putString(key, v).apply() }
     private fun loadSet(key: String): MutableSet<String> =
@@ -1829,7 +1914,8 @@ class MainActivity : Activity() {
     private fun blocked() = loadSet("blacklist")
     private fun admins() = loadSet("admins")
     private fun banned() = loadSet("banned")
-    private fun online(id: String) = links.values.contains(id)
+    private fun hidden() = loadSet("hidden")
+    private fun online(id: String) = links.values.contains(id) && !hidden().contains(id)
 
     private fun folderMap(): LinkedHashMap<String, MutableSet<String>> {
         val map = LinkedHashMap<String, MutableSet<String>>()
@@ -1856,12 +1942,14 @@ class MainActivity : Activity() {
         .put("id", m.id).put("from", m.from).put("text", m.text).put("mine", m.mine)
         .put("read", m.read).put("edited", m.edited).put("reply", m.reply)
         .put("fwd", m.fwd).put("unread", m.unread).put("img", m.img).put("time", m.time)
+        .put("delivered", m.delivered).put("pkt", m.pkt)
 
     private fun msgFromJson(o: JSONObject): Msg = Msg(
         id = o.getString("id"), from = o.getString("from"), text = o.getString("text"),
         mine = o.getBoolean("mine"), read = o.optBoolean("read"), edited = o.optBoolean("edited"),
         reply = o.optString("reply"), fwd = o.optString("fwd"), unread = o.optBoolean("unread"),
-        img = o.optString("img"), time = o.optLong("time", System.currentTimeMillis())
+        img = o.optString("img"), time = o.optLong("time", System.currentTimeMillis()),
+        delivered = o.optBoolean("delivered"), pkt = o.optString("pkt")
     )
 
     private fun saveChats() {
@@ -1891,7 +1979,7 @@ class MainActivity : Activity() {
         }
     }
 
-    // ---------- Пакеты ----------
+    // ---------- Пакеты и сообщения ----------
     private fun newPacket(type: String, to: String): JSONObject = JSONObject()
         .put("id", UUID.randomUUID().toString())
         .put("type", type)
@@ -1906,15 +1994,13 @@ class MainActivity : Activity() {
 
     // Админ-команда рассылается всем. Принимается только с правильным кодом.
     private fun sendAdminCmd(action: String, target: String, value: String) {
-        val p = newPacket("adm", "*")
+        sendPacket(newPacket("adm", "*")
             .put("action", action)
             .put("target", target)
             .put("value", value)
-            .put("code", ADMIN_CODE)
-        sendPacket(p)
+            .put("code", ADMIN_CODE))
     }
 
-    // Новому соседу передаём текущих админов и баны
     private fun sendAdminCmdTo(endpointId: String, action: String, target: String, value: String) {
         val p = newPacket("adm", "*")
             .put("action", action)
@@ -1924,9 +2010,11 @@ class MainActivity : Activity() {
         client.sendPayload(endpointId, Payload.fromBytes(p.toString().toByteArray()))
     }
 
+    // Новому соседу передаём текущих админов, баны и отключённых
     private fun syncAdmins(endpointId: String) {
         for (id in admins()) sendAdminCmdTo(endpointId, "admin", id, "on")
         for (id in banned()) sendAdminCmdTo(endpointId, "ban", id, "on")
+        for (id in hidden()) sendAdminCmdTo(endpointId, "hide", id, "on")
     }
 
     private fun sendMessage(peer: String, text: String, reply: String, fwd: String) {
@@ -1938,7 +2026,8 @@ class MainActivity : Activity() {
             .put("text", text)
             .put("reply", reply)
             .put("fwd", fwd)
-        addMsg(peer, Msg(id = p.getString("id"), from = myId, text = text, mine = true, reply = reply, fwd = fwd))
+        addMsg(peer, Msg(id = p.getString("id"), from = myId, text = text, mine = true,
+            reply = reply, fwd = fwd, pkt = p.toString()))
         sendPacket(p)
         refreshLive()
     }
@@ -1949,7 +2038,7 @@ class MainActivity : Activity() {
             reply = p.optString("reply"), fwd = p.optString("fwd"), unread = true
         )
         addMsg(from, msg)
-        if (!(screen == Screen.CHAT && openPeer == from)) notify(from, msg.text)
+        if (!(screen == Screen.CHAT && openPeer == from)) announce(from, msg.text)
     }
 
     // Переносим чат в конец, чтобы самые свежие были сверху
@@ -1959,10 +2048,33 @@ class MainActivity : Activity() {
         chats[peer] = list
     }
 
+    private fun sendAck(to: String, msgId: String) {
+        sendPacket(newPacket("ack", to).put("target", msgId))
+    }
+
+    private fun markDelivered(from: String, target: String) {
+        chats[from]?.firstOrNull { it.id == target }?.delivered = true
+    }
+
+    // Повторно отправляем сообщения, которые собеседник ещё не подтвердил
+    private fun resendUndelivered() {
+        if (links.isEmpty()) return
+        for (list in chats.values) {
+            for (m in list) {
+                if (m.mine && !m.delivered && m.pkt.isNotEmpty()) forward(JSONObject(m.pkt), null)
+            }
+        }
+    }
+
     private fun handleIncoming(fromEndpoint: String, p: JSONObject) {
         val id = p.getString("id")
-        if (!seen.add(id)) return
         val type = p.getString("type")
+
+        if (!seen.add(id)) {
+            // Повтор сообщения: подтверждение могло потеряться, поэтому подтверждаем ещё раз
+            if (type == "msg" && p.getString("to") == myId) sendAck(p.getString("from"), id)
+            return
+        }
 
         if (type == "photo") {
             val fid = p.getLong("fileId")
@@ -1978,14 +2090,20 @@ class MainActivity : Activity() {
             }
         } else {
             val from = p.getString("from")
-            if (p.getString("to") == myId && from !in banned() && from !in blocked()) {
+            if (p.getString("to") == myId) {
                 when (type) {
-                    "msg" -> receiveMessage(p, from)
+                    "msg" -> {
+                        sendAck(from, id)
+                        if (from !in banned() && from !in blocked()) receiveMessage(p, from)
+                    }
+                    "ack" -> markDelivered(from, p.getString("target"))
                     "edit" -> {
-                        val target = p.getString("target")
-                        chats[from]?.firstOrNull { it.id == target }?.let {
-                            it.text = p.getString("text")
-                            it.edited = true
+                        if (from !in banned()) {
+                            val target = p.getString("target")
+                            chats[from]?.firstOrNull { it.id == target }?.let {
+                                it.text = p.getString("text")
+                                it.edited = true
+                            }
                         }
                     }
                     "del" -> {
@@ -2019,22 +2137,24 @@ class MainActivity : Activity() {
         readyFiles.remove(fid)
         try {
             val id = p.getString("id")
+            val from = p.getString("from")
+            val to = p.getString("to")
+            val ttl = p.getInt("ttl")
             val dir = File(filesDir, "img").apply { mkdirs() }
             val local = File(dir, "$id.jpg")
             file.copyTo(local, overwrite = true)
 
-            val from = p.getString("from")
-            val to = p.getString("to")
-            val ttl = p.getInt("ttl")
-
-            if (to == myId && from !in banned() && from !in blocked()) {
-                addMsg(from, Msg(
-                    id = id, from = from, text = "", mine = false,
-                    reply = p.optString("reply"), fwd = p.optString("fwd"),
-                    unread = true, img = local.absolutePath
-                ))
-                refreshLive()
-                if (!(screen == Screen.CHAT && openPeer == from)) notify(from, t("photo"))
+            if (to == myId) {
+                sendAck(from, id)
+                if (from !in banned() && from !in blocked()) {
+                    addMsg(from, Msg(
+                        id = id, from = from, text = "", mine = false,
+                        reply = p.optString("reply"), fwd = p.optString("fwd"),
+                        unread = true, img = local.absolutePath
+                    ))
+                    refreshLive()
+                    if (!(screen == Screen.CHAT && openPeer == from)) announce(from, t("photo"))
+                }
             }
 
             if (ttl > 1) {
@@ -2058,18 +2178,60 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun notify(from: String, text: String) {
-        toast("@$from: $text")
-        if (!prefs.getBoolean("notifSound", true)) return
-        val saved = prefs.getString("sound", "") ?: ""
-        val uri = if (saved.isEmpty()) {
-            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+    // ---------- Уведомления ----------
+    // Если приложение открыто, показываем подсказку и играем мелодию. Если свёрнуто, системное уведомление.
+    private fun announce(from: String, text: String) {
+        if (foreground) {
+            toast("@$from: $text")
+            if (prefs.getBoolean("notifSound", true)) playRingtone()
         } else {
-            Uri.parse(saved)
+            postNotification(from, text)
         }
+    }
+
+    private fun playRingtone() {
+        val saved = prefs.getString("sound", "") ?: ""
+        val uri = if (saved.isEmpty()) RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION) else Uri.parse(saved)
         val r = RingtoneManager.getRingtone(this, uri) ?: return
         if (Build.VERSION.SDK_INT >= 28) r.volume = prefs.getInt("volume", 80) / 100f
         r.play()
+    }
+
+    // Канал создаётся заново при смене мелодии, потому что звук канала нельзя поменять
+    private fun channelFor(): String {
+        val on = prefs.getBoolean("notifSound", true)
+        val saved = prefs.getString("sound", "") ?: ""
+        val uri = if (saved.isEmpty()) RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION) else Uri.parse(saved)
+        val id = "msg_" + (uri.toString() + on).hashCode()
+        val nm = getSystemService(NotificationManager::class.java)
+        if (nm.getNotificationChannel(id) == null) {
+            val ch = NotificationChannel(id, t("notif_channel"), NotificationManager.IMPORTANCE_HIGH)
+            ch.enableVibration(true)
+            if (on) {
+                ch.setSound(uri, AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build())
+            } else {
+                ch.setSound(null, null)
+            }
+            nm.createNotificationChannel(ch)
+        }
+        return id
+    }
+
+    private fun postNotification(from: String, text: String) {
+        val intent = Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val pi = PendingIntent.getActivity(this, from.hashCode(), intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val n = Notification.Builder(this, channelFor())
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle("@$from")
+            .setContentText(text)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(from.hashCode(), n)
     }
 
     // ---------- Админ-команды ----------
@@ -2081,7 +2243,6 @@ class MainActivity : Activity() {
                 if (on) s.add(target) else s.remove(target)
                 saveSet("banned", s)
                 if (on) dropEndpointsOf(target)
-                if (on && target == myId) toast(t("you_banned"))
             }
             "admin" -> {
                 val s = admins()
@@ -2089,8 +2250,12 @@ class MainActivity : Activity() {
                 saveSet("admins", s)
                 if (on && target == myId) toast(t("admin_granted"))
             }
+            "hide" -> {
+                val s = hidden()
+                if (on) s.add(target) else s.remove(target)
+                saveSet("hidden", s)
+            }
             "setid" -> renameId(target, value)
-            "kick" -> dropEndpointsOf(target)
         }
     }
 
@@ -2100,7 +2265,7 @@ class MainActivity : Activity() {
         }
     }
 
-    // Меняем ID везде: в чатах, списках и у самого телефона
+    // Меняем ID везде: в чатах, списках, связях и у самого телефона
     private fun renameId(old: String, fresh: String) {
         if (old == fresh || !fresh.matches(Regex("\\d{6}"))) return
         chats.remove(old)?.let { moved ->
@@ -2108,13 +2273,14 @@ class MainActivity : Activity() {
             merged.addAll(moved)
             chats[fresh] = merged
         }
-        for (key in listOf("pinned", "archived", "blacklist", "admins", "banned")) {
+        for (key in listOf("pinned", "archived", "blacklist", "admins", "banned", "hidden")) {
             val s = loadSet(key)
             if (s.remove(old)) {
                 s.add(fresh)
                 saveSet(key, s)
             }
         }
+        for (ep in names.filterValues { it == old }.keys.toList()) names[ep] = fresh
         for (ep in links.filterValues { it == old }.keys.toList()) links[ep] = fresh
         if (openPeer == old) openPeer = fresh
         if (old == myId) {
@@ -2129,14 +2295,12 @@ class MainActivity : Activity() {
         client.stopAdvertising()
         client.stopDiscovery()
         val options = Strategy.P2P_CLUSTER
-        client.startAdvertising(
-            myId, serviceId, connectionCallback,
-            AdvertisingOptions.Builder().setStrategy(options).build()
-        ).addOnFailureListener { toast(t("net_err")) }
-        client.startDiscovery(
-            serviceId, discoveryCallback,
-            DiscoveryOptions.Builder().setStrategy(options).build()
-        ).addOnFailureListener { toast(t("net_err")) }
+        client.startAdvertising(myId, serviceId, connectionCallback,
+            AdvertisingOptions.Builder().setStrategy(options).build())
+            .addOnFailureListener { toast(t("net_err")) }
+        client.startDiscovery(serviceId, discoveryCallback,
+            DiscoveryOptions.Builder().setStrategy(options).build())
+            .addOnFailureListener { toast(t("net_err")) }
     }
 
     private fun stopMesh() {
@@ -2146,18 +2310,39 @@ class MainActivity : Activity() {
         links.clear()
         pending.clear()
         nearby.clear()
+        names.clear()
+    }
+
+    // Чтобы два телефона не пытались подключиться одновременно, первым подключается тот, у кого ID меньше
+    private fun tryConnect(endpointId: String) {
+        val peer = names[endpointId] ?: return
+        if (peer in banned() || endpointId in links.keys || endpointId in pending) return
+        if (myId >= peer) return
+        pending.add(endpointId)
+        client.requestConnection(myId, endpointId, connectionCallback)
+            .addOnFailureListener {
+                ui {
+                    pending.remove(endpointId)
+                    retryConnect(endpointId)
+                }
+            }
+    }
+
+    private fun retryConnect(endpointId: String) {
+        handler.postDelayed({ reconnect(endpointId) }, 4000L)
+    }
+
+    private fun reconnect(endpointId: String) {
+        if (endpointId in nearby.keys) tryConnect(endpointId)
     }
 
     private val discoveryCallback = object : EndpointDiscoveryCallback() {
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
-            if (info.endpointName in banned()) return
             ui {
+                if (info.endpointName in banned()) return@ui
+                names[endpointId] = info.endpointName
                 nearby[endpointId] = info.endpointName
-                if (endpointId !in links.keys && endpointId !in pending) {
-                    pending.add(endpointId)
-                    client.requestConnection(myId, endpointId, connectionCallback)
-                        .addOnFailureListener { pending.remove(endpointId) }
-                }
+                tryConnect(endpointId)
                 refreshLive()
             }
         }
@@ -2165,6 +2350,7 @@ class MainActivity : Activity() {
         override fun onEndpointLost(endpointId: String) {
             ui {
                 nearby.remove(endpointId)
+                names.remove(endpointId)
                 refreshLive()
             }
         }
@@ -2176,7 +2362,10 @@ class MainActivity : Activity() {
                 client.rejectConnection(endpointId)
                 return
             }
-            ui { nearby[endpointId] = info.endpointName }
+            ui {
+                names[endpointId] = info.endpointName
+                nearby[endpointId] = info.endpointName
+            }
             client.acceptConnection(endpointId, payloadCallback)
         }
 
@@ -2184,8 +2373,11 @@ class MainActivity : Activity() {
             ui {
                 pending.remove(endpointId)
                 if (result.status.isSuccess) {
-                    links[endpointId] = nearby[endpointId] ?: endpointId
+                    links[endpointId] = names[endpointId] ?: endpointId
                     if (isAdmin) syncAdmins(endpointId)
+                    resendUndelivered()
+                } else {
+                    retryConnect(endpointId)
                 }
                 refreshLive()
             }
@@ -2196,6 +2388,7 @@ class MainActivity : Activity() {
                 links.remove(endpointId)
                 pending.remove(endpointId)
                 refreshLive()
+                retryConnect(endpointId)
             }
         }
     }
