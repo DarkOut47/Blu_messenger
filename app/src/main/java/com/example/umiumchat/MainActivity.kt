@@ -1269,3 +1269,222 @@ class MainActivity : Activity() {
         meta.text = time + ticks
         meta.setTextColor(if (m.mine && m.read) Color.parseColor("#4FC3F7") else subColor)
         meta.textSize = 11f
+        meta.gravity = Gravity.END
+        box.addView(meta, LinearLayout.LayoutParams(-1, -2))
+
+        row.addView(box, LinearLayout.LayoutParams(-2, -2))
+        box.setOnLongClickListener {
+            if (haptic) box.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            messagePopup(box, peer, m)
+            true
+        }
+        return row
+    }
+
+    private fun previewOf(m: Msg): String =
+        "@${m.from}: " + (if (m.text.isNotEmpty()) m.text.take(60) else t("photo"))
+
+    private fun messagePopup(anchor: View, peer: String, m: Msg) {
+        val items = mutableListOf<Pair<String, () -> Unit>>()
+        items.add(t("reply") to { replyPreview = previewOf(m); editingId = null; fillHint() })
+        items.add(t("forward") to { pickForward(anchor, m) })
+        if (m.text.isNotEmpty()) items.add(t("copy") to { copyText(m.text) })
+        if (m.mine && m.img.isEmpty()) items.add(t("edit") to { startEdit(m) })
+        items.add(t("delete") to { deletePopup(anchor, peer, m) })
+        popup(anchor, items)
+    }
+
+    private fun startEdit(m: Msg) {
+        editingId = m.id
+        replyPreview = ""
+        inputField?.setText(m.text)
+        fillHint()
+    }
+
+    private fun deletePopup(anchor: View, peer: String, m: Msg) {
+        val items = mutableListOf<Pair<String, () -> Unit>>()
+        items.add(t("delete_for_me") to { deleteLocal(peer, m.id) })
+        if (m.mine) items.add(t("delete_for_both") to { deleteBoth(peer, m) })
+        popup(anchor, items)
+    }
+
+    private fun deleteLocal(peer: String, id: String) {
+        chats[peer]?.removeAll { it.id == id }
+        refreshLive()
+    }
+
+    private fun deleteBoth(peer: String, m: Msg) {
+        deleteLocal(peer, m.id)
+        sendPacket(newPacket("del", peer).put("target", m.id))
+    }
+
+    private fun pickForward(anchor: View, m: Msg) {
+        val targets = chats.keys.toList()
+        if (targets.isEmpty()) { toast(t("no_chats_forward")); return }
+        popup(anchor, targets.map { peer -> ("@$peer") to { forwardMsg(peer, m) } })
+    }
+
+    private fun forwardMsg(peer: String, m: Msg) {
+        val from = if (m.mine) myId else m.from
+        if (m.img.isNotEmpty()) sendPhotoFile(peer, File(m.img), from, "")
+        else sendMessage(peer, m.text, "", from)
+        toast(t("forwarded"))
+    }
+
+    private fun copyText(text: String) {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("message", text))
+        toast(t("copied"))
+    }
+
+    private fun editMessage(peer: String, id: String, text: String) {
+        val m = chats[peer]?.firstOrNull { it.id == id } ?: return
+        if (!m.mine) return
+        m.text = text
+        m.edited = true
+        sendPacket(newPacket("edit", peer).put("target", id).put("text", text))
+        refreshLive()
+    }
+
+    // ---------- Фото ----------
+    private fun pickPhoto() {
+        val intent = Intent(Intent.ACTION_GET_CONTENT)
+        intent.type = "image/*"
+        startActivityForResult(intent, 43)
+    }
+
+    private fun sendPhotoFromUri(uri: Uri) {
+        val peer = openPeer
+        Thread {
+            try {
+                val file = copyToLocalImage(uri)
+                ui {
+                    if (file != null) {
+                        val reply = replyPreview
+                        replyPreview = ""
+                        editingId = null
+                        sendPhotoFile(peer, file, "", reply)
+                        fillHint()
+                    }
+                }
+            } catch (e: Exception) {
+                ui { toast(t("net_err")) }
+            }
+        }.start()
+    }
+
+    // Сжимаем картинку до 1024 px, чтобы быстрее передавать
+    private fun copyToLocalImage(uri: Uri): File? {
+        val original = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } ?: return null
+        val scale = 1024f / maxOf(original.width, original.height)
+        val small = if (scale < 1f) {
+            Bitmap.createScaledBitmap(original, (original.width * scale).toInt(), (original.height * scale).toInt(), true)
+        } else original
+        val dir = File(filesDir, "img").apply { mkdirs() }
+        val file = File(dir, UUID.randomUUID().toString() + ".jpg")
+        FileOutputStream(file).use { small.compress(Bitmap.CompressFormat.JPEG, 75, it) }
+        return file
+    }
+
+    private fun sendPhotoFile(peer: String, file: File, fwd: String, reply: String) {
+        try {
+            val fp = Payload.fromFile(file)
+            val p = newPacket("photo", peer)
+                .put("fileId", fp.id)
+                .put("reply", reply)
+                .put("fwd", fwd)
+            addMsg(peer, Msg(id = p.getString("id"), from = myId, text = "", mine = true,
+                reply = reply, fwd = fwd, img = file.absolutePath))
+            animateLast = true
+            sendPacket(p)
+            val targets = links.keys.toList()
+            if (targets.isNotEmpty()) client.sendPayload(targets, fp)
+            refreshLive()
+        } catch (e: Exception) {
+            toast(t("net_err"))
+        }
+    }
+
+    // ---------- Профиль ----------
+    private val isAdmin: Boolean get() = admins().contains(myId)
+
+    private fun buildProfile() {
+        page(t("profile"), sub = t("profile_sub")) { c ->
+            val big = avatar(myId)
+            big.textSize = 36f
+            c.addView(big, LinearLayout.LayoutParams(dp(96), dp(96)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = dp(20)
+            })
+            val nameTv = TextView(this)
+            nameTv.text = nameSpan(myId)
+            nameTv.setTextColor(textColor)
+            nameTv.textSize = 20f
+            nameTv.typeface = Typeface.DEFAULT_BOLD
+            nameTv.gravity = Gravity.CENTER
+            c.addView(nameTv, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            if (isAdmin) {
+                val adm = smallText(t("is_admin"))
+                adm.gravity = Gravity.CENTER
+                c.addView(adm, LinearLayout.LayoutParams(-1, -2))
+            }
+            c.addView(label(t("my_id")))
+            addRow(c, navRow(myId, t("copy_id")) { copyText(myId) })
+            c.addView(smallText(t("id_hint")).apply { setPadding(dp(18), dp(12), dp(18), 0) })
+        }
+    }
+
+    // ---------- Поиск по ID ----------
+    private fun buildSearch() {
+        page(t("search_title"), left = backBtn(Screen.CHATS)) { c ->
+            val find = EditText(this)
+            find.hint = t("search_hint")
+            find.inputType = InputType.TYPE_CLASS_NUMBER
+            find.setTextColor(textColor)
+            find.setHintTextColor(subColor)
+            c.addView(find, LinearLayout.LayoutParams(-1, -2).apply {
+                leftMargin = dp(16); rightMargin = dp(16); topMargin = dp(12)
+            })
+
+            val findBtn = Button(this)
+            findBtn.text = t("find")
+            findBtn.setTextColor(Color.WHITE)
+            findBtn.isAllCaps = false
+            findBtn.setBackgroundColor(accent)
+            findBtn.setOnClickListener {
+                val q = find.text.toString().trim()
+                if (q.isEmpty()) return@setOnClickListener
+                val found = (nearby.values + chats.keys).firstOrNull { it == q }
+                if (found != null) openChat(found) else toast("@$q ${t("not_found")}")
+            }
+            c.addView(findBtn, LinearLayout.LayoutParams(-1, -2).apply {
+                leftMargin = dp(16); rightMargin = dp(16); topMargin = dp(8)
+            })
+
+            c.addView(label(t("nearby_now")))
+            val list = LinearLayout(this)
+            list.orientation = LinearLayout.VERTICAL
+            nearbyBox = list
+            c.addView(list)
+            fillNearby()
+        }
+    }
+
+    private fun fillNearby() {
+        val box = nearbyBox ?: return
+        box.removeAllViews()
+        val ids = nearby.values.distinct()
+        headerSub?.text = "${t("people_nearby")}: ${ids.size}"
+        if (ids.isEmpty()) {
+            box.addView(emptyText(t("nobody_nearby")))
+            return
+        }
+        for (id in ids) {
+            val isOn = online(id)
+            box.addView(
+                personRow(id, if (isOn) t("online") else t("nearby_word"), isOn, 0, false) { openChat(id) },
+                LinearLayout.LayoutParams(-1, -2)
+            )
+            addSeparator(box)
+        }
+    }
