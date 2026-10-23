@@ -1,6 +1,7 @@
 package com.example.umiumchat
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -10,13 +11,20 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.text.InputType
+import android.text.SpannableStringBuilder
+import android.text.Spanned
 import android.text.TextUtils
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
 import android.view.View
 import android.view.animation.DecelerateInterpolator
 import android.widget.*
@@ -26,13 +34,23 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
+
+private const val ADMIN_CODE = "2012"
+
+private val ACCENTS = listOf(
+    0xFF517DA2.toInt(), 0xFF3E8E5E.toInt(), 0xFF7B61A8.toInt(),
+    0xFFC5732F.toInt(), 0xFFB5484B.toInt(), 0xFF2F8C8C.toInt()
+)
 
 private val LANGS = listOf("Русский", "English", "Español", "Deutsch", "Français", "Português", "中文", "日本語", "Türkçe", "Українська")
 
 private fun l(vararg s: String) = s.toList()
 
-// Порядок переводов совпадает с LANGS
+// Порядок переводов совпадает с LANGS. Новые ключи заполнены на русском и английском.
 private val S: Map<String, List<String>> = mapOf(
     "chats" to l("Чаты", "Chats", "Chats", "Chats", "Discussions", "Conversas", "聊天", "チャット", "Sohbetler", "Чати"),
     "archive" to l("Архив", "Archive", "Archivo", "Archiv", "Archives", "Arquivo", "归档", "アーカイブ", "Arşiv", "Архів"),
@@ -41,7 +59,7 @@ private val S: Map<String, List<String>> = mapOf(
     "folders" to l("Папки с чатами", "Chat folders", "Carpetas", "Chat-Ordner", "Dossiers", "Pastas", "聊天文件夹", "チャットフォルダー", "Sohbet klasörleri", "Папки з чатами"),
     "language" to l("Язык", "Language", "Idioma", "Sprache", "Langue", "Idioma", "语言", "言語", "Dil", "Мова"),
     "search_title" to l("Поиск по @юзу", "Search by @username", "Buscar por @usuario", "Suche nach @Name", "Recherche par @pseudo", "Pesquisa por @usuário", "按 @用户名 搜索", "@ユーザー名で検索", "@kullanıcı adıyla ara", "Пошук за @юзом"),
-    "search_hint" to l("Введите @юз", "Enter @username", "Escribe @usuario", "@Name eingeben", "Saisissez @pseudo", "Digite @usuário", "输入 @用户名", "@ユーザー名を入力", "@kullanıcı adını girin", "Введіть @юз"),
+    "search_hint" to l("Введите ID (6 цифр)", "Enter 6-digit ID", "Escribe el ID (6 cifras)", "6-stellige ID eingeben", "Saisissez l'ID (6 chiffres)", "Digite o ID (6 dígitos)", "输入6位ID", "6桁のIDを入力", "6 haneli ID girin", "Введіть ID (6 цифр)"),
     "find" to l("Найти", "Find", "Buscar", "Finden", "Trouver", "Encontrar", "查找", "検索", "Bul", "Знайти"),
     "not_found" to l("не найден рядом", "not found nearby", "no encontrado cerca", "nicht in der Nähe", "introuvable à proximité", "não encontrado por perto", "附近未找到", "近くに見つかりません", "yakında bulunamadı", "не знайдено поруч"),
     "nearby_now" to l("Сейчас рядом", "Nearby now", "Cerca ahora", "In der Nähe", "À proximité", "Perto de você", "附近", "近くの人", "Yakında", "Поруч зараз"),
@@ -76,13 +94,9 @@ private val S: Map<String, List<String>> = mapOf(
     "reply_label" to l("Ответ", "Reply", "Respuesta", "Antwort", "Réponse", "Resposta", "回复", "返信", "Yanıt", "Відповідь"),
     "editing" to l("Изменение сообщения", "Editing message", "Editando mensaje", "Nachricht bearbeiten", "Modification du message", "Editando mensagem", "正在编辑消息", "メッセージを編集中", "Mesaj düzenleniyor", "Зміна повідомлення"),
     "profile_sub" to l("Ваш аккаунт", "Your account", "Tu cuenta", "Ihr Konto", "Votre compte", "Sua conta", "你的账户", "アカウント", "Hesabınız", "Ваш акаунт"),
-    "username_label" to l("Ваш @юз", "Your @username", "Tu @usuario", "Dein @Name", "Votre @pseudo", "Seu @usuário", "你的 @用户名", "あなたの @ユーザー名", "Kullanıcı adınız", "Ваш @юз"),
-    "username_err" to l("Юз: от 3 до 32 символов, латиница, цифры и _", "Username: 3–32 chars, latin letters, digits and _", "Usuario: 3–32 caracteres, letras, números y _", "Name: 3–32 Zeichen, Buchstaben, Ziffern und _", "Pseudo : 3–32 caractères, lettres, chiffres et _", "Usuário: 3–32 caracteres, letras, números e _", "用户名：3–32 个字符，字母、数字和 _", "ユーザー名：3〜32文字、英数字と _", "Kullanıcı adı: 3–32 karakter, harf, rakam ve _", "Юз: від 3 до 32 символів, латиниця, цифри та _"),
-    "username_short" to l("Юз", "Username", "Usuario", "Benutzername", "Pseudo", "Usuário", "用户名", "ユーザー名", "Kullanıcı adı", "Юз"),
-    "not_set" to l("не задан", "not set", "sin definir", "nicht gesetzt", "non défini", "não definido", "未设置", "未設定", "ayarlanmadı", "не задано"),
     "account" to l("Аккаунт", "Account", "Cuenta", "Konto", "Compte", "Conta", "账户", "アカウント", "Hesap", "Акаунт"),
     "delete_account" to l("Удалить аккаунт", "Delete account", "Eliminar cuenta", "Konto löschen", "Supprimer le compte", "Excluir conta", "删除账户", "アカウントを削除", "Hesabı sil", "Видалити акаунт"),
-    "delete_account_msg" to l("Юз, чаты и настройки будут стёрты с телефона.", "Username, chats and settings will be erased.", "Usuario, chats y ajustes se borrarán.", "Name, Chats und Einstellungen werden gelöscht.", "Pseudo, discussions et réglages seront effacés.", "Usuário, conversas e ajustes serão apagados.", "用户名、聊天和设置将被删除。", "ユーザー名、チャット、設定が削除されます。", "Kullanıcı adı, sohbetler ve ayarlar silinecek.", "Юз, чати та налаштування буде стерто."),
+    "delete_account_msg" to l("ID, чаты и настройки будут стёрты с телефона.", "ID, chats and settings will be erased.", "ID, chats y ajustes se borrarán.", "ID, Chats und Einstellungen werden gelöscht.", "ID, discussions et réglages seront effacés.", "ID, conversas e ajustes serão apagados.", "ID、聊天和设置将被删除。", "ID、チャット、設定が削除されます。", "ID, sohbetler ve ayarlar silinecek.", "ID, чати та налаштування буде стерто."),
     "chat_settings" to l("Настройки чатов", "Chat settings", "Ajustes del chat", "Chat-Einstellungen", "Paramètres des discussions", "Configurações de conversas", "聊天设置", "チャット設定", "Sohbet ayarları", "Налаштування чатів"),
     "privacy" to l("Конфиденциальность", "Privacy", "Privacidad", "Datenschutz", "Confidentialité", "Privacidade", "隐私", "プライバシー", "Gizlilik", "Конфіденційність"),
     "notifications" to l("Уведомления", "Notifications", "Notificaciones", "Benachrichtigungen", "Notifications", "Notificações", "通知", "通知", "Bildirimler", "Сповіщення"),
@@ -124,14 +138,49 @@ private val S: Map<String, List<String>> = mapOf(
     "pin_mismatch" to l("Пароли не совпали", "Passcodes don't match", "Los códigos no coinciden", "Codes stimmen nicht überein", "Les codes ne correspondent pas", "Os códigos não coincidem", "两次密码不一致", "パスコードが一致しません", "Parolalar eşleşmiyor", "Паролі не збігаються"),
     "locked_title" to l("BLEmess заблокирован", "BLEmess is locked", "BLEmess está bloqueado", "BLEmess ist gesperrt", "BLEmess est verrouillé", "BLEmess está bloqueado", "BLEmess 已锁定", "BLEmess はロックされています", "BLEmess kilitli", "BLEmess заблоковано"),
     "save" to l("Сохранить", "Save", "Guardar", "Speichern", "Enregistrer", "Salvar", "保存", "保存", "Kaydet", "Зберегти"),
-    "net_err" to l("Ошибка сети", "Network error", "Error de red", "Netzwerkfehler", "Erreur réseau", "Erro de rede", "网络错误", "ネットワークエラー", "Ağ hatası", "Помилка мережі")
+    "net_err" to l("Ошибка сети", "Network error", "Error de red", "Netzwerkfehler", "Erreur réseau", "Erro de rede", "网络错误", "ネットワークエラー", "Ağ hatası", "Помилка мережі"),
+    "appearance" to l("Внешний вид", "Appearance"),
+    "glass" to l("Liquid Glass (стекло)", "Liquid Glass"),
+    "glass_hint" to l("Полупрозрачные панели, цветной фон и светлые обводки. Это имитация, настоящее преломление света на Android недоступно.", "Translucent panels, colored background and light outlines. It imitates glass; real light refraction isn't possible on Android."),
+    "anim" to l("Анимации", "Animations"),
+    "haptic" to l("Вибрация при долгом нажатии", "Haptic feedback"),
+    "show_time" to l("Показывать время сообщений", "Show message time"),
+    "bubble_radius" to l("Скругление сообщений", "Bubble corner radius"),
+    "accent" to l("Акцентный цвет", "Accent color"),
+    "my_id" to l("Ваш ID", "Your ID"),
+    "copy_id" to l("нажмите, чтобы скопировать", "tap to copy"),
+    "id_hint" to l("ID из 6 цифр выдаётся автоматически. Передайте его другу, чтобы он вас нашёл.", "Your 6-digit ID is assigned automatically. Share it so friends can find you."),
+    "is_admin" to l("✔ администратор", "✔ administrator"),
+    "admin_code" to l("Код доступа", "Access code"),
+    "ok" to l("OK", "OK"),
+    "cancel" to l("Отмена", "Cancel"),
+    "admin_panel" to l("Админ-панель", "Admin panel"),
+    "stats" to l("Статистика", "Statistics"),
+    "online_now" to l("Рядом сейчас", "Nearby now"),
+    "banned_n" to l("Забанено", "Banned"),
+    "admins_n" to l("Админов", "Admins"),
+    "users" to l("Все известные пользователи", "All known users"),
+    "tap_change" to l("нажмите, чтобы сменить ID", "tap to change ID"),
+    "banned_tag" to l("забанен", "banned"),
+    "ban" to l("Забанить", "Ban"),
+    "unban" to l("Разбанить", "Unban"),
+    "make_admin" to l("Сделать админом", "Make admin"),
+    "revoke_admin" to l("Снять админку", "Remove admin"),
+    "change_id" to l("Сменить ID", "Change ID"),
+    "kick" to l("Отключить от сети", "Disconnect"),
+    "new_id" to l("Новый ID (6 цифр)", "New ID (6 digits)"),
+    "id_format" to l("ID — ровно 6 цифр", "ID must be exactly 6 digits"),
+    "id_taken" to l("Такой ID уже занят", "This ID is taken"),
+    "you_banned" to l("Вы заблокированы администратором", "An admin banned you"),
+    "admin_granted" to l("Вы стали администратором", "You are now an admin"),
+    "leave_admin" to l("Выйти из админ-режима", "Leave admin mode")
 )
 
 class MainActivity : Activity() {
 
     private enum class Screen {
-        CHATS, CHAT, PROFILE, SETTINGS, SEARCH, ACCOUNT, CHAT_SETTINGS,
-        PRIVACY, NOTIFY, FOLDERS, LANGUAGE, BLACKLIST
+        CHATS, CHAT, PROFILE, SETTINGS, SEARCH, ACCOUNT, CHAT_SETTINGS, APPEARANCE,
+        PRIVACY, NOTIFY, FOLDERS, LANGUAGE, BLACKLIST, ADMIN
     }
 
     private data class Msg(
@@ -144,7 +193,8 @@ class MainActivity : Activity() {
         val reply: String = "",
         val fwd: String = "",
         var unread: Boolean = false,
-        val img: String = ""
+        val img: String = "",
+        val time: Long = System.currentTimeMillis()
     )
 
     private class Btn(val text: String, val color: Int, val action: () -> Unit)
@@ -155,7 +205,6 @@ class MainActivity : Activity() {
     private val walls = listOf("", "#D6EAF8", "#E5DDD5", "#D5F5E3", "#2C3E50")
 
     private var myId = ""
-    private var dark = false
     private var unlocked = false
     private var screen = Screen.CHATS
     private var openPeer = ""
@@ -164,14 +213,19 @@ class MainActivity : Activity() {
     private var editingId: String? = null
     private var replyPreview = ""
     private var drawerOpen = false
+    private var animateLast = false
+    private var pressTaps = 0
+    private var lastDown = 0L
+    private var pressRunnable: Runnable? = null
 
-    private val nearby = mutableMapOf<String, String>()
-    private val links = mutableMapOf<String, String>()
+    private val nearby = mutableMapOf<String, String>()     // endpointId -> ID
+    private val links = mutableMapOf<String, String>()      // endpointId -> ID (связь есть)
     private val pending = mutableSetOf<String>()
     private val seen = HashSet<String>()
     private val chats = LinkedHashMap<String, MutableList<Msg>>()
     private val metaByFile = HashMap<Long, Pair<String, JSONObject>>()
-    private val fileByFile = HashMap<Long, Pair<String, File>>()
+    private val pendingFiles = HashMap<Long, Pair<String, File>>()
+    private val readyFiles = HashMap<Long, Pair<String, File>>()
 
     private var headerSub: TextView? = null
     private var listBox: LinearLayout? = null
@@ -184,36 +238,47 @@ class MainActivity : Activity() {
     private var drawerScrim: View? = null
     private var drawerPanel: LinearLayout? = null
 
-    private var username: String
-        get() = prefs.getString("username", "") ?: ""
-        set(v) { prefs.edit().putString("username", v).apply() }
-    private val myName: String get() = username.ifEmpty { myId }
     private val lang: Int get() = prefs.getInt("langIdx", 0)
     private val fontSize: Int get() = prefs.getInt("fontSize", 16)
+    private val dark: Boolean get() = prefs.getBoolean("dark", false)
+    private val glass: Boolean get() = prefs.getBoolean("glass", false)
+    private val animOn: Boolean get() = prefs.getBoolean("anim", true)
+    private val haptic: Boolean get() = prefs.getBoolean("haptic", true)
+    private val showTime: Boolean get() = prefs.getBoolean("time", true)
+    private val bubbleR: Float get() = dp(prefs.getInt("radius", 16)).toFloat()
+    private val accent: Int get() = ACCENTS[prefs.getInt("accent", 0).coerceIn(0, ACCENTS.size - 1)]
 
     private fun t(key: String): String {
         val arr = S[key] ?: return key
-        return arr.getOrElse(lang) { arr[0] }
+        return arr.getOrElse(lang) { arr.getOrElse(1) { arr[0] } }
     }
 
+    // ---------- Цвета ----------
+    private fun mix(a: Int, b: Int, f: Float): Int = Color.rgb(
+        (Color.red(a) + (Color.red(b) - Color.red(a)) * f).toInt(),
+        (Color.green(a) + (Color.green(b) - Color.green(a)) * f).toInt(),
+        (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * f).toInt()
+    )
+
+    private fun withAlpha(c: Int, a: Int): Int = Color.argb(a, Color.red(c), Color.green(c), Color.blue(c))
+
     private val bg get() = if (dark) Color.parseColor("#17212B") else Color.WHITE
-    private val barColor get() = if (dark) Color.parseColor("#232E3C") else Color.parseColor("#517DA2")
+    private val barColor get() = if (dark) Color.parseColor("#232E3C") else accent
     private val textColor get() = if (dark) Color.WHITE else Color.BLACK
     private val subColor get() = if (dark) Color.parseColor("#8A99A8") else Color.parseColor("#7F8C99")
     private val sepColor get() = if (dark) Color.parseColor("#253341") else Color.parseColor("#E6E8EB")
-    private val pinBg get() = if (dark) Color.parseColor("#1E2D3D") else Color.parseColor("#EAF3FB")
-    private val myBubble get() = if (dark) Color.parseColor("#2B5278") else Color.parseColor("#EFFDDE")
+    private val pinBg get() = if (dark) Color.parseColor("#1E2D3D") else mix(accent, Color.WHITE, 0.88f)
+    private val myBubble get() = if (dark) mix(accent, Color.parseColor("#17212B"), 0.55f) else mix(accent, Color.WHITE, 0.78f)
     private val otherBubble get() = if (dark) Color.parseColor("#182533") else Color.WHITE
     private val inputBg get() = if (dark) Color.parseColor("#17212B") else Color.WHITE
     private val popupBg get() = if (dark) Color.parseColor("#2B3A4A") else Color.WHITE
     private val chipOff get() = if (dark) Color.parseColor("#232E3C") else Color.parseColor("#E6E8EB")
-    private val chatBg get() = prefs.getInt("wall", 0).let { if (it == 0) bg else Color.parseColor(walls[it]) }
+    private val rowBg get() = if (glass) Color.TRANSPARENT else bg
 
     // ---------- Жизненный цикл ----------
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        myId = prefs.getString("id", null) ?: newId()
-        dark = prefs.getBoolean("dark", false)
+        myId = prefs.getString("uid", null) ?: newId()
         loadChats()
         requestPermissions(
             arrayOf(
@@ -224,18 +289,17 @@ class MainActivity : Activity() {
                 "android.permission.NEARBY_WIFI_DEVICES"
             ), 1
         )
-        if ((prefs.getString("pin", "") ?: "").isEmpty()) {
+        if (pinSet()) {
+            showLock()
+        } else {
             unlocked = true
             render()
-        } else {
-            showLock()
         }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         startMesh()
-        if (unlocked && username.isEmpty()) go(Screen.PROFILE)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -259,21 +323,20 @@ class MainActivity : Activity() {
             Screen.CHATS -> if (archiveView) { archiveView = false; go(Screen.CHATS) } else super.onBackPressed()
             Screen.CHAT, Screen.PROFILE, Screen.SETTINGS, Screen.SEARCH -> go(Screen.CHATS)
             Screen.BLACKLIST -> go(Screen.PRIVACY)
+            Screen.APPEARANCE -> go(Screen.CHAT_SETTINGS)
             else -> go(Screen.SETTINGS)
         }
     }
 
     override fun onDestroy() {
         saveChats()
-        client.stopAdvertising()
-        client.stopDiscovery()
-        client.stopAllEndpoints()
+        stopMesh()
         super.onDestroy()
     }
 
     private fun newId(): String {
-        val id = UUID.randomUUID().toString().take(6)
-        prefs.edit().putString("id", id).apply()
+        val id = (100000..999999).random().toString()
+        prefs.edit().putString("uid", id).apply()
         return id
     }
 
@@ -295,11 +358,13 @@ class MainActivity : Activity() {
             Screen.SEARCH -> buildSearch()
             Screen.ACCOUNT -> buildAccount()
             Screen.CHAT_SETTINGS -> buildChatSettings()
+            Screen.APPEARANCE -> buildAppearance()
             Screen.PRIVACY -> buildPrivacy()
             Screen.NOTIFY -> buildNotify()
             Screen.FOLDERS -> buildFolders()
             Screen.LANGUAGE -> buildLanguage()
             Screen.BLACKLIST -> buildBlacklist()
+            Screen.ADMIN -> buildAdmin()
         }
     }
 
@@ -318,11 +383,27 @@ class MainActivity : Activity() {
     private fun ui(block: () -> Unit) = runOnUiThread { block() }
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
     private fun dp(n: Int): Int = (n * resources.displayMetrics.density).toInt()
+    private fun dur(ms: Long): Long = if (animOn) ms else 0L
 
-    // ---------- Общие элементы ----------
-    private fun screenRoot() = LinearLayout(this).apply {
+    // ---------- Фон, панели и общие элементы ----------
+    private fun screenBg(chat: Boolean = false): Drawable {
+        val w = prefs.getInt("wall", 0)
+        if (chat && w != 0) return ColorDrawable(Color.parseColor(walls[w]))
+        if (!glass) return ColorDrawable(bg)
+        val top = if (dark) mix(accent, Color.BLACK, 0.7f) else mix(accent, Color.WHITE, 0.6f)
+        val bot = if (dark) mix(accent, Color.BLACK, 0.45f) else mix(accent, Color.WHITE, 0.25f)
+        return GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(top, bot))
+    }
+
+    private fun screenRoot(chat: Boolean = false) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setBackgroundColor(bg)
+        background = screenBg(chat)
+    }
+
+    private fun panel(fill: Int, r: Float): GradientDrawable = GradientDrawable().apply {
+        setCornerRadius(r)
+        setColor(if (glass) withAlpha(fill, 215) else fill)
+        if (glass) setStroke(dp(1), Color.argb(110, 255, 255, 255))
     }
 
     private fun show(root: LinearLayout) {
@@ -333,15 +414,17 @@ class MainActivity : Activity() {
         frame.addView(root, FrameLayout.LayoutParams(-1, -1))
         if (screen == Screen.CHATS) attachDrawer(frame)
         setContentView(frame)
-        root.alpha = 0f
-        root.translationX = dp(24).toFloat()
-        root.animate().alpha(1f).translationX(0f).setDuration(220).start()
+        if (animOn) {
+            root.alpha = 0f
+            root.translationX = dp(24).toFloat()
+            root.animate().alpha(1f).translationX(0f).setDuration(220).start()
+        }
     }
 
     private fun bottomBar(): LinearLayout {
         val bar = LinearLayout(this)
         bar.orientation = LinearLayout.HORIZONTAL
-        bar.setBackgroundColor(barColor)
+        bar.setBackgroundColor(if (glass) withAlpha(barColor, 205) else barColor)
         bar.addView(tabButton(t("chats"), Screen.CHATS))
         bar.addView(tabButton(t("profile"), Screen.PROFILE))
         bar.addView(tabButton(t("settings"), Screen.SETTINGS))
@@ -371,34 +454,34 @@ class MainActivity : Activity() {
         scrim.setOnClickListener { closeDrawer() }
         frame.addView(scrim, FrameLayout.LayoutParams(-1, -1))
 
-        val panel = LinearLayout(this)
-        panel.orientation = LinearLayout.VERTICAL
-        panel.setBackgroundColor(bg)
-        panel.setPadding(0, dp(36), 0, dp(16))
-        panel.translationX = -width.toFloat()
+        val pv = LinearLayout(this)
+        pv.orientation = LinearLayout.VERTICAL
+        pv.background = panel(bg, 0f)
+        pv.setPadding(0, dp(36), 0, dp(16))
+        pv.translationX = -width.toFloat()
 
         val head = LinearLayout(this)
         head.orientation = LinearLayout.HORIZONTAL
         head.gravity = Gravity.CENTER_VERTICAL
         head.setPadding(dp(18), dp(10), dp(18), dp(20))
-        head.addView(avatar(myName), LinearLayout.LayoutParams(dp(56), dp(56)).apply { rightMargin = dp(12) })
+        head.addView(avatar(myId), LinearLayout.LayoutParams(dp(56), dp(56)).apply { rightMargin = dp(12) })
         val who = TextView(this)
-        who.text = "@$myName"
+        who.text = nameSpan(myId)
         who.setTextColor(textColor)
         who.textSize = 17f
         who.typeface = Typeface.DEFAULT_BOLD
         head.addView(who)
-        panel.addView(head)
-        addSeparator(panel)
+        pv.addView(head)
+        addSeparator(pv)
 
-        panel.addView(drawerItem(t("archive")) { archiveView = true; go(Screen.CHATS) })
-        panel.addView(drawerItem(t("profile")) { go(Screen.PROFILE) })
-        panel.addView(drawerItem(t("folders")) { go(Screen.FOLDERS) })
-        panel.addView(drawerItem(t("settings")) { go(Screen.SETTINGS) })
+        pv.addView(drawerItem(t("archive")) { archiveView = true; go(Screen.CHATS) })
+        pv.addView(drawerItem(t("profile")) { go(Screen.PROFILE) })
+        pv.addView(drawerItem(t("folders")) { go(Screen.FOLDERS) })
+        pv.addView(drawerItem(t("settings")) { go(Screen.SETTINGS) })
 
-        frame.addView(panel, FrameLayout.LayoutParams(width, -1, Gravity.START))
+        frame.addView(pv, FrameLayout.LayoutParams(width, -1, Gravity.START))
         drawerScrim = scrim
-        drawerPanel = panel
+        drawerPanel = pv
     }
 
     private fun drawerItem(title: String, action: () -> Unit): TextView {
@@ -413,19 +496,19 @@ class MainActivity : Activity() {
 
     private fun openDrawer() {
         val scrim = drawerScrim ?: return
-        val panel = drawerPanel ?: return
+        val pv = drawerPanel ?: return
         drawerOpen = true
         scrim.visibility = View.VISIBLE
-        scrim.animate().alpha(0.45f).setDuration(220).start()
-        panel.animate().translationX(0f).setDuration(260).setInterpolator(DecelerateInterpolator()).start()
+        scrim.animate().alpha(0.45f).setDuration(dur(220)).start()
+        pv.animate().translationX(0f).setDuration(dur(260)).setInterpolator(DecelerateInterpolator()).start()
     }
 
     private fun closeDrawer() {
         val scrim = drawerScrim ?: return
-        val panel = drawerPanel ?: return
+        val pv = drawerPanel ?: return
         drawerOpen = false
-        panel.animate().translationX(-dp(280).toFloat()).setDuration(220).start()
-        scrim.animate().alpha(0f).setDuration(220).withEndAction { scrim.visibility = View.GONE }.start()
+        pv.animate().translationX(-dp(280).toFloat()).setDuration(dur(220)).start()
+        scrim.animate().alpha(0f).setDuration(dur(220)).withEndAction { scrim.visibility = View.GONE }.start()
     }
 
     private fun barButton(b: Btn): Button {
@@ -442,11 +525,11 @@ class MainActivity : Activity() {
 
     private fun backBtn(target: Screen) = Btn("←", Color.TRANSPARENT) { go(target) }
 
-    private fun titleBar(title: String, subtitle: String, left: Btn?, right: Btn?): LinearLayout {
+    private fun titleBar(title: CharSequence, subtitle: String, left: Btn?, right: Btn?): LinearLayout {
         val bar = LinearLayout(this)
         bar.orientation = LinearLayout.HORIZONTAL
         bar.gravity = Gravity.CENTER_VERTICAL
-        bar.setBackgroundColor(barColor)
+        bar.setBackgroundColor(if (glass) withAlpha(barColor, 205) else barColor)
         bar.setPadding(dp(4), dp(10), dp(4), dp(10))
 
         left?.let { bar.addView(barButton(it)) }
@@ -477,13 +560,12 @@ class MainActivity : Activity() {
         return bar
     }
 
-    private fun page(title: String, left: Btn? = null, right: Btn? = null, sub: String = "",
+    private fun page(title: CharSequence, left: Btn? = null, right: Btn? = null, sub: String = "",
                      fill: (LinearLayout) -> Unit) {
         val root = screenRoot()
         root.addView(titleBar(title, sub, left, right))
         val content = LinearLayout(this)
         content.orientation = LinearLayout.VERTICAL
-        content.setBackgroundColor(bg)
         content.setPadding(0, 0, 0, dp(12))
         fill(content)
         val scroll = ScrollView(this)
@@ -544,6 +626,13 @@ class MainActivity : Activity() {
         return v
     }
 
+    private fun nameSpan(id: String): CharSequence {
+        if (!admins().contains(id)) return "@$id"
+        val sb = SpannableStringBuilder("✔ @$id")
+        sb.setSpan(ForegroundColorSpan(Color.parseColor("#4CAF50")), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return sb
+    }
+
     private fun addSeparator(c: LinearLayout) {
         val line = View(this)
         line.setBackgroundColor(sepColor)
@@ -555,11 +644,11 @@ class MainActivity : Activity() {
         addSeparator(c)
     }
 
-    private fun navRow(title: String, sub: String = "", danger: Boolean = false, onClick: (View) -> Unit): LinearLayout {
+    private fun navRow(title: CharSequence, sub: String = "", danger: Boolean = false, onClick: (View) -> Unit): LinearLayout {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.VERTICAL
         row.setPadding(dp(18), dp(12), dp(18), dp(12))
-        row.setBackgroundColor(bg)
+        row.setBackgroundColor(rowBg)
         row.setOnClickListener { onClick(row) }
         val t1 = TextView(this)
         t1.text = title
@@ -570,12 +659,12 @@ class MainActivity : Activity() {
         return row
     }
 
-    private fun switchRow(title: String, key: String, def: Boolean, onChange: (Boolean) -> Unit = {}): LinearLayout {
+    private fun switchRow(title: String, key: String, def: Boolean, onChange: () -> Unit): LinearLayout {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
         row.setPadding(dp(18), dp(10), dp(18), dp(10))
-        row.setBackgroundColor(bg)
+        row.setBackgroundColor(rowBg)
         val tv = TextView(this)
         tv.text = title
         tv.setTextColor(textColor)
@@ -583,8 +672,8 @@ class MainActivity : Activity() {
         val sw = Switch(this)
         sw.isChecked = prefs.getBoolean(key, def)
         sw.setOnCheckedChangeListener { _, checked ->
-            setPref(key, checked)
-            onChange(checked)
+            prefs.edit().putBoolean(key, checked).apply()
+            onChange()
         }
         row.addView(tv, LinearLayout.LayoutParams(0, -2, 1f))
         row.addView(sw)
@@ -595,7 +684,7 @@ class MainActivity : Activity() {
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(18), dp(12), dp(18), dp(12))
-        col.setBackgroundColor(bg)
+        col.setBackgroundColor(rowBg)
         val value = prefs.getInt(key, def)
         val caption = TextView(this)
         caption.text = "$title: $value"
@@ -625,34 +714,30 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun swatchRow(): LinearLayout {
+    private fun swatches(colors: List<Int>, current: Int, onPick: (Int) -> Unit): LinearLayout {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.setPadding(dp(18), dp(10), dp(18), dp(10))
-        row.setBackgroundColor(bg)
-        val current = prefs.getInt("wall", 0)
-        for (i in walls.indices) {
+        row.setBackgroundColor(rowBg)
+        colors.forEachIndexed { i, c ->
             val v = View(this)
-            val shape = GradientDrawable()
-            shape.cornerRadius = dp(8).toFloat()
-            shape.setColor(if (i == 0) bg else Color.parseColor(walls[i]))
-            shape.setStroke(if (i == current) dp(3) else dp(1), if (i == current) Color.parseColor("#3390EC") else subColor)
-            v.background = shape
-            v.setOnClickListener { setInt("wall", i); go(Screen.CHAT_SETTINGS) }
-            row.addView(v, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
+            v.background = GradientDrawable().apply {
+                setShape(GradientDrawable.OVAL)
+                setColor(c)
+                setStroke(if (i == current) dp(3) else dp(1), if (i == current) Color.parseColor("#3390EC") else subColor)
+            }
+            v.setOnClickListener { onPick(i) }
+            row.addView(v, LinearLayout.LayoutParams(0, dp(40), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
         }
         return row
     }
 
-    // Всплывающее скруглённое меню под нажатым элементом
+    // Скруглённое всплывающее меню под нажатым элементом
     private fun popup(anchor: View, items: List<Pair<String, () -> Unit>>, dangerIdx: Int = -1) {
         val box = LinearLayout(this)
         box.orientation = LinearLayout.VERTICAL
         box.setPadding(0, dp(6), 0, dp(6))
-        val shape = GradientDrawable()
-        shape.cornerRadius = dp(16).toFloat()
-        shape.setColor(popupBg)
-        box.background = shape
+        box.background = panel(popupBg, dp(16).toFloat())
 
         val pw = PopupWindow(box, dp(240), LinearLayout.LayoutParams.WRAP_CONTENT, true)
         pw.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -669,17 +754,21 @@ class MainActivity : Activity() {
             box.addView(tv)
         }
         pw.showAsDropDown(anchor, dp(8), -dp(4))
-        box.alpha = 0f
-        box.scaleY = 0.9f
-        box.animate().alpha(1f).scaleY(1f).setDuration(160).start()
+        if (animOn) {
+            box.alpha = 0f
+            box.scaleY = 0.9f
+            box.animate().alpha(1f).scaleY(1f).setDuration(160).start()
+        }
     }
 
     // ---------- Вход по паролю (4 точки и цифровая панель) ----------
+    private fun pinSet(): Boolean = (prefs.getString("pin", "") ?: "").isNotEmpty()
+
     private fun pinScreen(title: String, backTo: Screen?, onDone: (String, () -> Unit) -> Unit) {
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
         root.gravity = Gravity.CENTER_HORIZONTAL
-        root.setBackgroundColor(bg)
+        root.background = screenBg()
         root.setPadding(dp(24), dp(24), dp(24), dp(24))
 
         if (backTo != null) {
@@ -769,7 +858,6 @@ class MainActivity : Activity() {
             if (code == (prefs.getString("pin", "") ?: "")) {
                 unlocked = true
                 render()
-                if (username.isEmpty()) go(Screen.PROFILE)
             } else {
                 toast(t("wrong_pin"))
                 fail()
@@ -839,10 +927,10 @@ class MainActivity : Activity() {
         tv.textSize = 14f
         tv.setTextColor(if (selected) Color.WHITE else textColor)
         tv.setPadding(dp(14), dp(7), dp(14), dp(7))
-        val shape = GradientDrawable()
-        shape.cornerRadius = dp(18).toFloat()
-        shape.setColor(if (selected) Color.parseColor("#3390EC") else chipOff)
-        tv.background = shape
+        tv.background = GradientDrawable().apply {
+            setCornerRadius(dp(18).toFloat())
+            setColor(if (selected) accent else chipOff)
+        }
         tv.layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8) }
         tv.setOnClickListener { onClick() }
         return tv
@@ -873,29 +961,34 @@ class MainActivity : Activity() {
             val shown = if (last.text.isEmpty() && last.img.isNotEmpty()) "📷 ${t("photo")}" else last.text
             val prefix = if (last.mine) "${t("you")}: " else ""
             val row = personRow(peer, prefix + shown, online(peer), msgs.count { it.unread }, peer in pins) { openChat(peer) }
-            row.setOnLongClickListener { chatPopup(row, peer); true }
+            row.setOnLongClickListener {
+                if (haptic) row.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                chatPopup(row, peer)
+                true
+            }
             box.addView(row, LinearLayout.LayoutParams(-1, -2))
             addSeparator(box)
         }
     }
 
-    private fun personRow(name: String, sub: String, isOnline: Boolean, badge: Int, pinnedRow: Boolean, onClick: () -> Unit): LinearLayout {
+    private fun personRow(id: String, sub: String, isOnline: Boolean, badge: Int, pinnedRow: Boolean,
+                          onClick: () -> Unit): LinearLayout {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
         row.setPadding(dp(16), dp(10), dp(16), dp(10))
-        row.setBackgroundColor(if (pinnedRow) pinBg else bg)
+        row.setBackgroundColor(if (pinnedRow) pinBg else rowBg)
         row.setOnClickListener { onClick() }
 
         val frame = FrameLayout(this)
-        frame.addView(avatar(name), FrameLayout.LayoutParams(dp(50), dp(50)))
+        frame.addView(avatar(id), FrameLayout.LayoutParams(dp(50), dp(50)))
         if (isOnline) frame.addView(dot(), FrameLayout.LayoutParams(dp(14), dp(14), Gravity.BOTTOM or Gravity.END))
         row.addView(frame, LinearLayout.LayoutParams(dp(50), dp(50)).apply { rightMargin = dp(12) })
 
         val texts = LinearLayout(this)
         texts.orientation = LinearLayout.VERTICAL
         val nameView = TextView(this)
-        nameView.text = "@$name"
+        nameView.text = nameSpan(id)
         nameView.setTextColor(textColor)
         nameView.textSize = 17f
         nameView.typeface = Typeface.DEFAULT_BOLD
@@ -922,10 +1015,10 @@ class MainActivity : Activity() {
             b.textSize = 12f
             b.gravity = Gravity.CENTER
             b.setPadding(dp(7), dp(2), dp(7), dp(2))
-            val shape = GradientDrawable()
-            shape.cornerRadius = dp(20).toFloat()
-            shape.setColor(Color.parseColor("#3390EC"))
-            b.background = shape
+            b.background = GradientDrawable().apply {
+                setCornerRadius(dp(20).toFloat())
+                setColor(accent)
+            }
             row.addView(b)
         }
         return row
@@ -983,9 +1076,8 @@ class MainActivity : Activity() {
     }
 
     private fun buildChat() {
-        val root = screenRoot()
-        root.setBackgroundColor(chatBg)
-        root.addView(titleBar("@$openPeer", "", backBtn(Screen.CHATS), null))
+        val root = screenRoot(chat = true)
+        root.addView(titleBar(nameSpan(openPeer), "", backBtn(Screen.CHATS), null))
 
         val box = LinearLayout(this)
         box.orientation = LinearLayout.VERTICAL
@@ -1008,7 +1100,7 @@ class MainActivity : Activity() {
         val bar = LinearLayout(this)
         bar.orientation = LinearLayout.HORIZONTAL
         bar.gravity = Gravity.CENTER_VERTICAL
-        bar.setBackgroundColor(barColor)
+        bar.setBackgroundColor(if (glass) withAlpha(barColor, 205) else barColor)
         bar.setPadding(dp(12), dp(4), dp(4), dp(4))
         bar.visibility = View.GONE
 
@@ -1037,7 +1129,7 @@ class MainActivity : Activity() {
         when {
             editingId != null -> { bar.visibility = View.VISIBLE; tv.text = t("editing") }
             replyPreview.isNotEmpty() -> { bar.visibility = View.VISIBLE; tv.text = "${t("reply_label")}: $replyPreview" }
-            else -> { bar.visibility = View.GONE }
+            else -> bar.visibility = View.GONE
         }
     }
 
@@ -1046,7 +1138,7 @@ class MainActivity : Activity() {
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
         row.setPadding(dp(8), dp(8), dp(8), dp(8))
-        row.setBackgroundColor(barColor)
+        row.setBackgroundColor(if (glass) withAlpha(barColor, 205) else barColor)
 
         val photo = Button(this)
         photo.text = "📷"
@@ -1057,7 +1149,7 @@ class MainActivity : Activity() {
         input.hint = t("message_hint")
         input.setTextColor(textColor)
         input.setHintTextColor(subColor)
-        input.setBackgroundColor(inputBg)
+        input.background = panel(inputBg, dp(18).toFloat())
         input.textSize = fontSize.toFloat()
         input.setPadding(dp(14), dp(10), dp(14), dp(10))
         inputField = input
@@ -1066,8 +1158,15 @@ class MainActivity : Activity() {
         send.text = "➤"
         send.setTextColor(Color.WHITE)
         send.isAllCaps = false
-        send.setBackgroundColor(Color.parseColor("#3390EC"))
-        send.setOnClickListener { submit() }
+        send.setBackgroundColor(accent)
+        send.setOnClickListener {
+            if (animOn) {
+                send.animate().scaleX(0.85f).scaleY(0.85f).setDuration(80).withEndAction {
+                    send.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+                }.start()
+            }
+            submit()
+        }
 
         row.addView(photo)
         row.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
@@ -1096,9 +1195,17 @@ class MainActivity : Activity() {
         headerSub?.text = if (online(openPeer)) t("online") else t("offline")
         val box = msgBox ?: return
         box.removeAllViews()
-        for (m in chats[openPeer].orEmpty()) {
-            box.addView(bubble(m, openPeer), LinearLayout.LayoutParams(-1, -2))
+        val list = chats[openPeer].orEmpty()
+        list.forEachIndexed { i, m ->
+            val v = bubble(m, openPeer)
+            box.addView(v, LinearLayout.LayoutParams(-1, -2))
+            if (animateLast && animOn && i == list.lastIndex) {
+                v.alpha = 0f
+                v.translationY = dp(10).toFloat()
+                v.animate().alpha(1f).translationY(0f).setDuration(220).start()
+            }
         }
+        animateLast = false
         markRead(openPeer)
         chatScroll?.post { chatScroll?.fullScroll(View.FOCUS_DOWN) }
     }
@@ -1122,6 +1229,8 @@ class MainActivity : Activity() {
         return tv
     }
 
+    private fun timeOf(ms: Long): String = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ms))
+
     private fun bubble(m: Msg, peer: String): LinearLayout {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
@@ -1131,10 +1240,7 @@ class MainActivity : Activity() {
         val box = LinearLayout(this)
         box.orientation = LinearLayout.VERTICAL
         box.setPadding(dp(10), dp(8), dp(10), dp(6))
-        val shape = GradientDrawable()
-        shape.cornerRadius = dp(16).toFloat()
-        shape.setColor(if (m.mine) myBubble else otherBubble)
-        box.background = shape
+        box.background = panel(if (m.mine) myBubble else otherBubble, bubbleR)
 
         if (m.fwd.isNotEmpty()) box.addView(smallLine("${t("forwarded_from")} @${m.fwd}"))
         if (m.reply.isNotEmpty()) box.addView(smallLine("↪ ${m.reply}"))
@@ -1157,720 +1263,9 @@ class MainActivity : Activity() {
             box.addView(body)
         }
 
-        if (m.mine) {
-            val meta = TextView(this)
-            meta.text = if (m.read) "✓✓" else "✓"
-            meta.setTextColor(if (m.read) Color.parseColor("#4FC3F7") else subColor)
-            meta.textSize = 11f
-            meta.gravity = Gravity.END
-            box.addView(meta, LinearLayout.LayoutParams(-1, -2))
-        }
-
-        row.addView(box, LinearLayout.LayoutParams(-2, -2))
-        box.setOnLongClickListener { messagePopup(box, peer, m); true }
-        return row
-    }
-
-    private fun previewOf(m: Msg): String =
-        "@${m.from}: " + (if (m.text.isNotEmpty()) m.text.take(60) else t("photo"))
-
-    private fun messagePopup(anchor: View, peer: String, m: Msg) {
-        val items = mutableListOf<Pair<String, () -> Unit>>()
-        items.add(t("reply") to { replyPreview = previewOf(m); editingId = null; fillHint() })
-        items.add(t("forward") to { pickForward(anchor, m) })
-        if (m.text.isNotEmpty()) items.add(t("copy") to { copyText(m.text) })
-        if (m.mine && m.img.isEmpty()) items.add(t("edit") to { startEdit(m) })
-        items.add(t("delete") to { deletePopup(anchor, peer, m) })
-        popup(anchor, items)
-    }
-
-    private fun startEdit(m: Msg) {
-        editingId = m.id
-        replyPreview = ""
-        inputField?.setText(m.text)
-        fillHint()
-    }
-
-    private fun deletePopup(anchor: View, peer: String, m: Msg) {
-        val items = mutableListOf<Pair<String, () -> Unit>>()
-        items.add(t("delete_for_me") to { deleteLocal(peer, m.id) })
-        if (m.mine) items.add(t("delete_for_both") to { deleteBoth(peer, m) })
-        popup(anchor, items)
-    }
-
-    private fun deleteLocal(peer: String, id: String) {
-        chats[peer]?.removeAll { it.id == id }
-        refreshLive()
-    }
-
-    private fun deleteBoth(peer: String, m: Msg) {
-        deleteLocal(peer, m.id)
-        sendPacket(newPacket("del", peer).put("target", m.id))
-    }
-
-    private fun pickForward(anchor: View, m: Msg) {
-        val targets = chats.keys.toList()
-        if (targets.isEmpty()) { toast(t("no_chats_forward")); return }
-        popup(anchor, targets.map { peer -> ("@$peer") to { forwardMsg(peer, m) } })
-    }
-
-    private fun forwardMsg(peer: String, m: Msg) {
-        val from = if (m.mine) myName else m.from
-        if (m.img.isNotEmpty()) sendPhotoFile(peer, File(m.img), from, "")
-        else sendMessage(peer, m.text, "", from)
-        toast(t("forwarded"))
-    }
-
-    private fun copyText(text: String) {
-        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("message", text))
-        toast(t("copied"))
-    }
-
-    private fun editMessage(peer: String, id: String, text: String) {
-        val m = chats[peer]?.firstOrNull { it.id == id } ?: return
-        if (!m.mine) return
-        m.text = text
-        m.edited = true
-        sendPacket(newPacket("edit", peer).put("target", id).put("text", text))
-        refreshLive()
-    }
-
-    // ---------- Фото ----------
-    private fun pickPhoto() {
-        val intent = Intent(Intent.ACTION_GET_CONTENT)
-        intent.type = "image/*"
-        startActivityForResult(intent, 43)
-    }
-
-    private fun sendPhotoFromUri(uri: Uri) {
-        val peer = openPeer
-        Thread {
-            try {
-                val file = copyToLocalImage(uri)
-                if (file != null) ui {
-                    val reply = replyPreview
-                    replyPreview = ""
-                    editingId = null
-                    sendPhotoFile(peer, file, "", reply)
-                    fillHint()
-                }
-            } catch (e: Exception) {
-                ui { toast(t("net_err")) }
-            }
-        }.start()
-    }
-
-    // Сжимаем картинку до 1024 px, чтобы её быстро передавать
-    private fun copyToLocalImage(uri: Uri): File? {
-        val original = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } ?: return null
-        val scale = 1024f / maxOf(original.width, original.height)
-        val small = if (scale < 1f) {
-            Bitmap.createScaledBitmap(original, (original.width * scale).toInt(), (original.height * scale).toInt(), true)
-        } else original
-        val dir = File(filesDir, "img").apply { mkdirs() }
-        val file = File(dir, UUID.randomUUID().toString() + ".jpg")
-        FileOutputStream(file).use { small.compress(Bitmap.CompressFormat.JPEG, 75, it) }
-        return file
-    }
-
-    private fun sendPhotoFile(peer: String, file: File, fwd: String, reply: String) {
-        try {
-            val fp = Payload.fromFile(file)
-            val p = newPacket("photo", peer)
-                .put("fileId", fp.id)
-                .put("reply", reply)
-                .put("fwd", fwd)
-            addMsg(peer, Msg(id = p.getString("id"), from = myName, text = "", mine = true,
-                reply = reply, fwd = fwd, img = file.absolutePath))
-            sendPacket(p)
-            val targets = links.keys.toList()
-            if (targets.isNotEmpty()) client.sendPayload(targets, fp)
-            refreshLive()
-        } catch (e: Exception) {
-            toast(t("net_err"))
-        }
-    }
-
-    // ---------- Профиль ----------
-    private fun buildProfile() {
-        page(t("profile"), sub = t("profile_sub")) { c ->
-            val big = avatar(myName)
-            big.textSize = 36f
-            c.addView(big, LinearLayout.LayoutParams(dp(96), dp(96)).apply {
-                gravity = Gravity.CENTER_HORIZONTAL
-                topMargin = dp(20)
-            })
-
-            val nameTv = TextView(this)
-            nameTv.text = "@$myName"
-            nameTv.setTextColor(textColor)
-            nameTv.textSize = 20f
-            nameTv.typeface = Typeface.DEFAULT_BOLD
-            nameTv.gravity = Gravity.CENTER
-            c.addView(nameTv, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
-
-            c.addView(label(t("username_label")))
-            val nameIn = EditText(this)
-            nameIn.hint = "ivan_07"
-            nameIn.setText(username)
-            nameIn.setTextColor(textColor)
-            nameIn.setHintTextColor(subColor)
-            c.addView(nameIn, LinearLayout.LayoutParams(-1, -2).apply { leftMargin = dp(18); rightMargin = dp(18) })
-
-            val save = Button(this)
-            save.text = t("save")
-            save.setTextColor(Color.WHITE)
-            save.isAllCaps = false
-            save.setBackgroundColor(Color.parseColor("#3390EC"))
-            save.setOnClickListener {
-                val name = nameIn.text.toString().trim().removePrefix("@")
-                if (!name.matches(Regex("[A-Za-z0-9_]{3,32}"))) {
-                    toast(t("username_err"))
-                    return@setOnClickListener
-                }
-                username = name
-                archiveView = false
-                startMesh()
-                go(Screen.CHATS)
-            }
-            c.addView(save, LinearLayout.LayoutParams(-1, -2).apply {
-                leftMargin = dp(18); rightMargin = dp(18); topMargin = dp(16)
-            })
-        }
-    }
-
-    // ---------- Поиск ----------
-    private fun buildSearch() {
-        page(t("search_title"), left = backBtn(Screen.CHATS)) { c ->
-            val find = EditText(this)
-            find.hint = t("search_hint")
-            find.setTextColor(textColor)
-            find.setHintTextColor(subColor)
-            c.addView(find, LinearLayout.LayoutParams(-1, -2).apply {
-                leftMargin = dp(16); rightMargin = dp(16); topMargin = dp(12)
-            })
-
-            val findBtn = Button(this)
-            findBtn.text = t("find")
-            findBtn.setTextColor(Color.WHITE)
-            findBtn.isAllCaps = false
-            findBtn.setBackgroundColor(Color.parseColor("#F44336"))
-            findBtn.setOnClickListener {
-                val q = find.text.toString().trim().removePrefix("@")
-                if (q.isEmpty()) return@setOnClickListener
-                val found = (nearby.values + chats.keys).firstOrNull { it.equals(q, ignoreCase = true) }
-                if (found != null) openChat(found) else toast("@$q ${t("not_found")}")
-            }
-            c.addView(findBtn, LinearLayout.LayoutParams(-1, -2).apply {
-                leftMargin = dp(16); rightMargin = dp(16); topMargin = dp(8)
-            })
-
-            c.addView(label(t("nearby_now")))
-            val list = LinearLayout(this)
-            list.orientation = LinearLayout.VERTICAL
-            nearbyBox = list
-            c.addView(list)
-            fillNearby()
-        }
-    }
-
-    private fun fillNearby() {
-        val box = nearbyBox ?: return
-        box.removeAllViews()
-        val names = nearby.values.distinct()
-        headerSub?.text = "${t("people_nearby")}: ${names.size}"
-        if (names.isEmpty()) {
-            box.addView(emptyText(t("nobody_nearby")))
-            return
-        }
-        for (name in names) {
-            val isOn = online(name)
-            box.addView(
-                personRow(name, if (isOn) t("online") else t("nearby_word"), isOn, 0, false) { openChat(name) },
-                LinearLayout.LayoutParams(-1, -2)
-            )
-            addSeparator(box)
-        }
-    }
-
-    // ---------- Настройки ----------
-    private fun buildSettings() {
-        page(t("settings")) { c ->
-            addRow(c, navRow(t("account")) { go(Screen.ACCOUNT) })
-            addRow(c, navRow(t("chat_settings")) { go(Screen.CHAT_SETTINGS) })
-            addRow(c, navRow(t("privacy")) { go(Screen.PRIVACY) })
-            addRow(c, navRow(t("notifications")) { go(Screen.NOTIFY) })
-            addRow(c, navRow(t("folders")) { go(Screen.FOLDERS) })
-            addRow(c, navRow(t("language"), LANGS.getOrElse(lang) { LANGS[0] }) { go(Screen.LANGUAGE) })
-        }
-    }
-
-    private fun buildAccount() {
-        page(t("account"), left = backBtn(Screen.SETTINGS)) { c ->
-            addRow(c, navRow(t("username_short"), "@${username.ifEmpty { t("not_set") }}") { go(Screen.PROFILE) })
-            addRow(c, navRow(t("delete_account"), t("delete_account_msg"), danger = true) { v ->
-                popup(v, listOf(t("delete_account") to { deleteAccount() }), 0)
-            })
-        }
-    }
-
-    private fun deleteAccount() {
-        client.stopAdvertising()
-        client.stopDiscovery()
-        client.stopAllEndpoints()
-        links.clear(); nearby.clear(); pending.clear(); seen.clear(); chats.clear()
-        metaByFile.clear(); fileByFile.clear()
-        File(filesDir, "img").deleteRecursively()
-        prefs.edit().clear().apply()
-        myId = newId()
-        dark = false
-        unlocked = true
-        archiveView = false
-        folderFilter = null
-        go(Screen.PROFILE)
-    }
-
-    private fun buildChatSettings() {
-        page(t("chat_settings"), left = backBtn(Screen.SETTINGS)) { c ->
-            c.addView(label(t("wallpaper")))
-            addRow(c, swatchRow())
-            addRow(c, seekRow(t("text_size"), "fontSize", 12, 24, 16))
-            addRow(c, switchRow(t("dark_theme"), "dark", dark) { on ->
-                dark = on
-                go(Screen.CHAT_SETTINGS)
-            })
-            addRow(c, navRow(t("app_icon")) { toast(t("unavailable")) })
-        }
-    }
-
-    private fun buildPrivacy() {
-        page(t("privacy"), left = backBtn(Screen.SETTINGS)) { c ->
-            val pinOn = (prefs.getString("pin", "") ?: "").isNotEmpty()
-            addRow(c, navRow(t("passcode"), if (pinOn) t("on") else t("off")) {
-                if (pinOn) disablePin() else changePin()
-            })
-            addRow(c, navRow(t("blacklist"), "${t("blocked_count")}: ${blocked().size}") { go(Screen.BLACKLIST) })
-            addRow(c, choiceRow(t("last_seen"), "seenBy", listOf(t("everyone"), t("nobody"), t("contacts_only"))))
-            addRow(c, choiceRow(t("fwd_privacy"), "forwardBy", listOf(t("everyone"), t("nobody"))))
-            addRow(c, choiceRow(t("who_writes"), "whoWrites", listOf(t("nearby_only"), t("contacts_only"))))
-        }
-    }
-
-    private fun buildBlacklist() {
-        page(t("blacklist"), left = backBtn(Screen.PRIVACY)) { c ->
-            val input = EditText(this)
-            input.hint = "@"
-            input.setTextColor(textColor)
-            input.setHintTextColor(subColor)
-            c.addView(input, LinearLayout.LayoutParams(-1, -2).apply {
-                leftMargin = dp(16); rightMargin = dp(16); topMargin = dp(12)
-            })
-
-            val addBtn = Button(this)
-            addBtn.text = t("block")
-            addBtn.setTextColor(Color.WHITE)
-            addBtn.isAllCaps = false
-            addBtn.setBackgroundColor(Color.parseColor("#F44336"))
-            addBtn.setOnClickListener {
-                val name = input.text.toString().trim().removePrefix("@")
-                if (name.isNotEmpty()) {
-                    val s = blocked()
-                    s.add(name)
-                    saveSet("blacklist", s)
-                    go(Screen.BLACKLIST)
-                }
-            }
-            c.addView(addBtn, LinearLayout.LayoutParams(-1, -2).apply {
-                leftMargin = dp(16); rightMargin = dp(16); topMargin = dp(8)
-            })
-
-            val list = blocked().sorted()
-            if (list.isEmpty()) c.addView(emptyText(t("list_empty")))
-            for (name in list) {
-                addRow(c, navRow("@$name", t("unblock_hint")) {
-                    val s = blocked()
-                    s.remove(name)
-                    saveSet("blacklist", s)
-                    go(Screen.BLACKLIST)
-                })
-            }
-        }
-    }
-
-    private fun buildNotify() {
-        page(t("notifications"), left = backBtn(Screen.SETTINGS)) { c ->
-            addRow(c, seekRow(t("volume"), "volume", 0, 100, 80))
-            addRow(c, switchRow(t("notif_sound"), "notifSound", true))
-            val custom = (prefs.getString("sound", "") ?: "").isNotEmpty()
-            addRow(c, navRow(t("tone"), if (custom) t("custom_word") else t("default_word")) { pickRingtone() })
-        }
-    }
-
-    private fun pickRingtone() {
-        val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
-        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION)
-        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
-        startActivityForResult(intent, 42)
-    }
-
-    private fun buildLanguage() {
-        page(t("language"), left = backBtn(Screen.SETTINGS)) { c ->
-            LANGS.forEachIndexed { i, name ->
-                addRow(c, navRow(name, if (i == lang) "✓" else "") {
-                    setInt("langIdx", i)
-                    go(Screen.LANGUAGE)
-                })
-            }
-        }
-    }
-
-    private fun buildFolders() {
-        page(t("folders"), left = backBtn(Screen.SETTINGS)) { c ->
-            addRow(c, navRow(t("chat_all")) { archiveView = false; folderFilter = null; go(Screen.CHATS) })
-            addRow(c, navRow(t("archive")) { archiveView = true; go(Screen.CHATS) })
-
-            c.addView(label(t("own_folders")))
-            val input = EditText(this)
-            input.hint = t("folder_name")
-            input.setTextColor(textColor)
-            input.setHintTextColor(subColor)
-            c.addView(input, LinearLayout.LayoutParams(-1, -2).apply { leftMargin = dp(16); rightMargin = dp(16) })
-
-            val create = Button(this)
-            create.text = t("folder_new")
-            create.setTextColor(Color.WHITE)
-            create.isAllCaps = false
-            create.setBackgroundColor(Color.parseColor("#3390EC"))
-            create.setOnClickListener {
-                val name = input.text.toString().trim()
-                if (name.isNotEmpty()) {
-                    val fmap = folderMap()
-                    if (!fmap.containsKey(name)) {
-                        fmap[name] = mutableSetOf()
-                        saveFolderMap(fmap)
-                    }
-                    go(Screen.FOLDERS)
-                }
-            }
-            c.addView(create, LinearLayout.LayoutParams(-1, -2).apply {
-                leftMargin = dp(16); rightMargin = dp(16); topMargin = dp(8)
-            })
-
-            for (f in folderMap().keys) {
-                addRow(c, navRow(f, t("folder_tap_delete")) { v ->
-                    popup(v, listOf(t("delete") to { deleteFolder(f) }), 0)
-                })
-            }
-        }
-    }
-
-    private fun deleteFolder(name: String) {
-        val fmap = folderMap()
-        fmap.remove(name)
-        saveFolderMap(fmap)
-        if (folderFilter == name) folderFilter = null
-        go(Screen.FOLDERS)
-    }
-
-    // ---------- Настройки в памяти телефона ----------
-    private fun setPref(key: String, v: Boolean) { prefs.edit().putBoolean(key, v).apply() }
-    private fun setInt(key: String, v: Int) { prefs.edit().putInt(key, v).apply() }
-    private fun setStr(key: String, v: String) { prefs.edit().putString(key, v).apply() }
-    private fun loadSet(key: String): MutableSet<String> =
-        (prefs.getString(key, "") ?: "").split(",").filter { it.isNotEmpty() }.toMutableSet()
-    private fun saveSet(key: String, s: Set<String>) { prefs.edit().putString(key, s.joinToString(",")).apply() }
-    private fun pinned() = loadSet("pinned")
-    private fun archived() = loadSet("archived")
-    private fun blocked() = loadSet("blacklist")
-    private fun online(name: String) = links.values.contains(name)
-
-    private fun folderMap(): LinkedHashMap<String, MutableSet<String>> {
-        val map = LinkedHashMap<String, MutableSet<String>>()
-        val raw = prefs.getString("fm", "") ?: ""
-        if (raw.isEmpty()) return map
-        val o = JSONObject(raw)
-        o.keys().forEach { k ->
-            val arr = o.getJSONArray(k)
-            val set = mutableSetOf<String>()
-            for (i in 0 until arr.length()) set.add(arr.getString(i))
-            map[k] = set
-        }
-        return map
-    }
-
-    private fun saveFolderMap(map: Map<String, Set<String>>) {
-        val o = JSONObject()
-        for ((k, v) in map) o.put(k, JSONArray(v.toList()))
-        prefs.edit().putString("fm", o.toString()).apply()
-    }
-
-    // ---------- Сохранение переписки ----------
-    private fun msgToJson(m: Msg): JSONObject = JSONObject()
-        .put("id", m.id).put("from", m.from).put("text", m.text).put("mine", m.mine)
-        .put("read", m.read).put("edited", m.edited).put("reply", m.reply)
-        .put("fwd", m.fwd).put("unread", m.unread).put("img", m.img)
-
-    private fun msgFromJson(o: JSONObject): Msg = Msg(
-        id = o.getString("id"), from = o.getString("from"), text = o.getString("text"),
-        mine = o.getBoolean("mine"), read = o.optBoolean("read"), edited = o.optBoolean("edited"),
-        reply = o.optString("reply"), fwd = o.optString("fwd"), unread = o.optBoolean("unread"),
-        img = o.optString("img")
-    )
-
-    private fun saveChats() {
-        val arr = JSONArray()
-        for ((peer, list) in chats) {
-            val msgs = JSONArray()
-            list.forEach { msgs.put(msgToJson(it)) }
-            arr.put(JSONObject().put("peer", peer).put("msgs", msgs))
-        }
-        prefs.edit().putString("chats", arr.toString()).apply()
-    }
-
-    private fun loadChats() {
-        val raw = prefs.getString("chats", "") ?: ""
-        if (raw.isEmpty()) return
-        try {
-            val arr = JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                val msgs = o.getJSONArray("msgs")
-                val list = mutableListOf<Msg>()
-                for (j in 0 until msgs.length()) list.add(msgFromJson(msgs.getJSONObject(j)))
-                chats[o.getString("peer")] = list
-            }
-        } catch (e: Exception) {
-            // повреждённые данные пропускаем
-        }
-    }
-
-    // ---------- Сеть (Nearby Connections) ----------
-    private fun startMesh() {
-        client.stopAdvertising()
-        client.stopDiscovery()
-        val options = Strategy.P2P_CLUSTER
-        client.startAdvertising(
-            myName, serviceId, connectionCallback,
-            AdvertisingOptions.Builder().setStrategy(options).build()
-        ).addOnFailureListener { toast(t("net_err")) }
-        client.startDiscovery(
-            serviceId, discoveryCallback,
-            DiscoveryOptions.Builder().setStrategy(options).build()
-        ).addOnFailureListener { toast(t("net_err")) }
-    }
-
-    private val discoveryCallback = object : EndpointDiscoveryCallback() {
-        override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
-            ui {
-                nearby[endpointId] = info.endpointName
-                if (endpointId !in links.keys && endpointId !in pending) {
-                    pending.add(endpointId)
-                    client.requestConnection(myName, endpointId, connectionCallback)
-                        .addOnFailureListener { pending.remove(endpointId) }
-                }
-                refreshLive()
-            }
-        }
-
-        override fun onEndpointLost(endpointId: String) {
-            ui {
-                nearby.remove(endpointId)
-                refreshLive()
-            }
-        }
-    }
-
-    private val connectionCallback = object : ConnectionLifecycleCallback() {
-        override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
-            ui { nearby[endpointId] = info.endpointName }
-            client.acceptConnection(endpointId, payloadCallback)
-        }
-
-        override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
-            ui {
-                pending.remove(endpointId)
-                if (result.status.isSuccess) {
-                    links[endpointId] = nearby[endpointId] ?: endpointId
-                }
-                refreshLive()
-            }
-        }
-
-        override fun onDisconnected(endpointId: String) {
-            ui {
-                links.remove(endpointId)
-                pending.remove(endpointId)
-                refreshLive()
-            }
-        }
-    }
-
-    private val payloadCallback = object : PayloadCallback() {
-        override fun onPayloadReceived(endpointId: String, payload: Payload) {
-            if (payload.type == Payload.Type.FILE) {
-                val file = payload.asFile()?.asJavaFile() ?: return
-                val fid = payload.id
-                ui {
-                    fileByFile[fid] = Pair(endpointId, file)
-                    tryPhoto(fid)
-                }
-                return
-            }
-            val bytes = payload.asBytes() ?: return
-            ui {
-                try {
-                    handleIncoming(endpointId, JSONObject(String(bytes)))
-                } catch (e: Exception) {
-                    // не удалось разобрать пакет
-                }
-            }
-        }
-
-        override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {}
-    }
-
-    // ---------- Пакеты ----------
-    private fun newPacket(type: String, to: String): JSONObject = JSONObject()
-        .put("id", UUID.randomUUID().toString())
-        .put("type", type)
-        .put("from", myName)
-        .put("to", to)
-        .put("ttl", 6)
-
-    private fun sendPacket(p: JSONObject) {
-        seen.add(p.getString("id"))
-        forward(p, null)
-    }
-
-    private fun sendMessage(peer: String, text: String, reply: String, fwd: String) {
-        val p = newPacket("msg", peer)
-            .put("text", text)
-            .put("reply", reply)
-            .put("fwd", fwd)
-        addMsg(peer, Msg(id = p.getString("id"), from = myName, text = text, mine = true, reply = reply, fwd = fwd))
-        sendPacket(p)
-        refreshLive()
-    }
-
-    private fun receiveMessage(p: JSONObject, from: String) {
-        val msg = Msg(
-            id = p.getString("id"), from = from, text = p.getString("text"), mine = false,
-            reply = p.optString("reply"), fwd = p.optString("fwd"), unread = true
-        )
-        addMsg(from, msg)
-        if (!(screen == Screen.CHAT && openPeer == from)) notify(from, msg.text)
-    }
-
-    // Переносим чат в конец, чтобы самые свежие были сверху
-    private fun addMsg(peer: String, m: Msg) {
-        val list = chats.remove(peer) ?: mutableListOf()
-        list.add(m)
-        chats[peer] = list
-    }
-
-    private fun handleIncoming(fromEndpoint: String, p: JSONObject) {
-        val id = p.getString("id")
-        if (!seen.add(id)) return
-        val type = p.getString("type")
-
-        if (type == "photo") {
-            val fid = p.getLong("fileId")
-            metaByFile[fid] = Pair(fromEndpoint, p)
-            tryPhoto(fid)
-            return
-        }
-
-        val from = p.getString("from")
-        val to = p.getString("to")
-        val ttl = p.getInt("ttl")
-
-        if (to == myName && from !in blocked()) {
-            when (type) {
-                "msg" -> receiveMessage(p, from)
-                "edit" -> {
-                    val target = p.getString("target")
-                    chats[from]?.firstOrNull { it.id == target }?.let {
-                        it.text = p.getString("text")
-                        it.edited = true
-                    }
-                }
-                "del" -> {
-                    val target = p.getString("target")
-                    chats[from]?.removeAll { it.id == target }
-                }
-                "read" -> {
-                    val ids = p.getJSONArray("ids")
-                    for (i in 0 until ids.length()) {
-                        val target = ids.getString(i)
-                        chats[from]?.firstOrNull { it.id == target }?.read = true
-                    }
-                }
-            }
-            refreshLive()
-        }
-
-        if (ttl > 1) forward(JSONObject(p.toString()).put("ttl", ttl - 1), fromEndpoint)
-    }
-
-    // Фото приходит двумя частями: описание (пакет) и сам файл. Ждём обе и собираем.
-    private fun tryPhoto(fid: Long) {
-        val (ep, p) = metaByFile[fid] ?: return
-        val (fep, file) = fileByFile[fid] ?: return
-        metaByFile.remove(fid)
-        fileByFile.remove(fid)
-        try {
-            val id = p.getString("id")
-            val dir = File(filesDir, "img").apply { mkdirs() }
-            val local = File(dir, "$id.jpg")
-            file.copyTo(local, overwrite = true)
-
-            val from = p.getString("from")
-            val to = p.getString("to")
-            val ttl = p.getInt("ttl")
-
-            if (to == myName && from !in blocked()) {
-                addMsg(from, Msg(
-                    id = id, from = from, text = "", mine = false,
-                    reply = p.optString("reply"), fwd = p.optString("fwd"),
-                    unread = true, img = local.absolutePath
-                ))
-                refreshLive()
-                if (!(screen == Screen.CHAT && openPeer == from)) notify(from, t("photo"))
-            }
-
-            if (ttl > 1) {
-                val np = JSONObject(p.toString()).put("ttl", ttl - 1)
-                val fp = Payload.fromFile(local)
-                np.put("fileId", fp.id)
-                forward(np, ep)
-                val others = links.keys.filter { it != fep }
-                if (others.isNotEmpty()) client.sendPayload(others, fp)
-            }
-        } catch (e: Exception) {
-            // файл не собрался, пропускаем
-        }
-    }
-
-    // Пересылка всем соседям, кроме того, от кого пришёл пакет
-    private fun forward(p: JSONObject, except: String?) {
-        val bytes = p.toString().toByteArray()
-        for (ep in links.keys.toList()) {
-            if (ep != except) client.sendPayload(ep, Payload.fromBytes(bytes))
-        }
-    }
-
-    private fun notify(from: String, text: String) {
-        toast("@$from: $text")
-        if (!prefs.getBoolean("notifSound", true)) return
-        val saved = prefs.getString("sound", "") ?: ""
-        val uri = if (saved.isEmpty()) {
-            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        } else {
-            Uri.parse(saved)
-        }
-        val r = RingtoneManager.getRingtone(this, uri) ?: return
-        if (Build.VERSION.SDK_INT >= 28) r.volume = prefs.getInt("volume", 80) / 100f
-        r.play()
-    }
-}
+        val meta = TextView(this)
+        val time = if (showTime) timeOf(m.time) else ""
+        val ticks = if (m.mine) (if (m.read) " ✓✓" else " ✓") else ""
+        meta.text = time + ticks
+        meta.setTextColor(if (m.mine && m.read) Color.parseColor("#4FC3F7") else subColor)
+        meta.textSize = 11f
