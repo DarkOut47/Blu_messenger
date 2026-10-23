@@ -1488,3 +1488,749 @@ class MainActivity : Activity() {
             addSeparator(box)
         }
     }
+    // ---------- Настройки ----------
+    private var downAt = 0L
+
+    private fun buildSettings() {
+        page(t("settings")) { c ->
+            addRow(c, navRow(t("account")) { go(Screen.ACCOUNT) })
+            addRow(c, navRow(t("chat_settings")) { go(Screen.CHAT_SETTINGS) })
+            addRow(c, navRow(t("privacy")) { go(Screen.PRIVACY) })
+            addRow(c, navRow(t("notifications")) { go(Screen.NOTIFY) })
+            addRow(c, navRow(t("folders")) { go(Screen.FOLDERS) })
+            addRow(c, navRow(t("language"), LANGS.getOrElse(lang) { LANGS[0] }) { go(Screen.LANGUAGE) })
+            if (isAdmin) addRow(c, navRow(t("admin_panel"), t("stats")) { go(Screen.ADMIN) })
+            val credit = TextView(this)
+            credit.text = "by DarkOut47 and AI Agents :))"
+            credit.setTextColor(subColor)
+            credit.textSize = 13f
+            credit.gravity = Gravity.CENTER
+            credit.setPadding(dp(18), dp(40), dp(18), dp(24))
+            secretTouch(credit)
+            c.addView(credit, LinearLayout.LayoutParams(-1, -2))
+        }
+    }
+
+    // Один быстрый тап, затем удержание второго нажатия открывает окно с кодом
+    private fun secretTouch(v: View) {
+        v.setOnTouchListener { view, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    downAt = System.currentTimeMillis()
+                    if (downAt - lastDown > 1200) pressTaps = 0
+                    pressRunnable?.let { view.removeCallbacks(it) }
+                    val r = Runnable {
+                        if (pressTaps >= 1) {
+                            pressTaps = 0
+                            adminCodeDialog()
+                        }
+                    }
+                    pressRunnable = r
+                    view.postDelayed(r, 500)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    pressRunnable?.let { view.removeCallbacks(it) }
+                    if (e.action == MotionEvent.ACTION_UP && System.currentTimeMillis() - downAt < 300) {
+                        pressTaps++
+                        lastDown = System.currentTimeMillis()
+                    } else {
+                        pressTaps = 0
+                    }
+                }
+            }
+            true
+        }
+    }
+
+    private fun adminCodeDialog() {
+        val input = EditText(this)
+        input.hint = t("admin_code")
+        input.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+        AlertDialog.Builder(this)
+            .setTitle(t("admin_code"))
+            .setView(input)
+            .setPositiveButton(t("ok")) { _, _ ->
+                if (input.text.toString() == ADMIN_CODE) {
+                    if (!admins().contains(myId)) adminDo("admin", myId, "on") else go(Screen.ADMIN)
+                } else {
+                    toast(t("wrong_pin"))
+                }
+            }
+            .setNegativeButton(t("cancel"), null)
+            .show()
+    }
+
+    // Действие применяется здесь и рассылается остальным
+    private fun adminDo(action: String, target: String, value: String) {
+        applyAdmin(action, target, value)
+        sendAdminCmd(action, target, value)
+        go(Screen.ADMIN)
+    }
+
+    private fun knownIds(): List<String> {
+        val others = (chats.keys + nearby.values + links.values + admins() + banned())
+            .filter { it != myId }
+            .distinct()
+            .sorted()
+        return listOf(myId) + others
+    }
+
+    private fun buildAdmin() {
+        page(t("admin_panel"), left = backBtn(Screen.SETTINGS), sub = t("stats")) { c ->
+            addRow(c, navRow("${t("online_now")}: ${nearby.values.distinct().size}") { })
+            addRow(c, navRow("${t("banned_n")}: ${banned().size}") { })
+            addRow(c, navRow("${t("admins_n")}: ${admins().size}") { })
+            c.addView(label(t("users")))
+            for (id in knownIds()) {
+                val tags = listOfNotNull(
+                    if (admins().contains(id)) t("is_admin") else null,
+                    if (banned().contains(id)) t("banned_tag") else null,
+                    if (online(id)) t("online") else null
+                ).joinToString(" · ")
+                addRow(c, navRow(nameSpan(id), tags) { v -> userAdminPopup(v, id) })
+            }
+            addRow(c, navRow(t("leave_admin"), "", danger = true) {
+                applyAdmin("admin", myId, "off")
+                sendAdminCmd("admin", myId, "off")
+                go(Screen.SETTINGS)
+            })
+        }
+    }
+
+    private fun userAdminPopup(anchor: View, id: String) {
+        val isBanned = banned().contains(id)
+        val isAdm = admins().contains(id)
+        val items = listOf(
+            (if (isBanned) t("unban") else t("ban")) to { adminDo("ban", id, if (isBanned) "off" else "on") },
+            (if (isAdm) t("revoke_admin") else t("make_admin")) to { adminDo("admin", id, if (isAdm) "off" else "on") },
+            t("change_id") to { changeIdDialog(id) },
+            t("kick") to { adminDo("kick", id, "") }
+        )
+        popup(anchor, items)
+    }
+
+    private fun changeIdDialog(oldId: String) {
+        val input = EditText(this)
+        input.hint = t("new_id")
+        input.inputType = InputType.TYPE_CLASS_NUMBER
+        input.setText(oldId)
+        AlertDialog.Builder(this)
+            .setTitle(t("change_id"))
+            .setView(input)
+            .setPositiveButton(t("save")) { _, _ ->
+                val fresh = input.text.toString().trim()
+                when {
+                    !fresh.matches(Regex("\\d{6}")) -> toast(t("id_format"))
+                    fresh == oldId -> Unit
+                    knownIds().contains(fresh) -> toast(t("id_taken"))
+                    else -> adminDo("setid", oldId, fresh)
+                }
+            }
+            .setNegativeButton(t("cancel"), null)
+            .show()
+    }
+
+    private fun buildAccount() {
+        page(t("account"), left = backBtn(Screen.SETTINGS)) { c ->
+            addRow(c, navRow(t("my_id"), myId) { copyText(myId) })
+            addRow(c, navRow(t("delete_account"), t("delete_account_msg"), danger = true) { v ->
+                popup(v, listOf(t("delete_account") to { deleteAccount() }), 0)
+            })
+        }
+    }
+
+    private fun deleteAccount() {
+        stopMesh()
+        chats.clear()
+        seen.clear()
+        metaByFile.clear()
+        pendingFiles.clear()
+        readyFiles.clear()
+        File(filesDir, "img").deleteRecursively()
+        prefs.edit().clear().apply()
+        myId = newId()
+        unlocked = true
+        archiveView = false
+        folderFilter = null
+        openPeer = ""
+        startMesh()
+        go(Screen.PROFILE)
+    }
+
+    private fun buildChatSettings() {
+        page(t("chat_settings"), left = backBtn(Screen.SETTINGS)) { c ->
+            c.addView(label(t("wallpaper")))
+            addRow(c, swatches(walls.map { if (it.isEmpty()) bg else Color.parseColor(it) },
+                prefs.getInt("wall", 0)) { i ->
+                setInt("wall", i)
+                go(Screen.CHAT_SETTINGS)
+            })
+            addRow(c, seekRow(t("text_size"), "fontSize", 12, 24, 16))
+            addRow(c, switchRow(t("dark_theme"), "dark", false) { go(Screen.CHAT_SETTINGS) })
+            addRow(c, navRow(t("appearance")) { go(Screen.APPEARANCE) })
+            addRow(c, navRow(t("app_icon")) { toast(t("unavailable")) })
+        }
+    }
+
+    private fun buildAppearance() {
+        page(t("appearance"), left = backBtn(Screen.CHAT_SETTINGS)) { c ->
+            addRow(c, switchRow(t("glass"), "glass", false) { go(Screen.APPEARANCE) })
+            c.addView(smallText(t("glass_hint")).apply { setPadding(dp(18), 0, dp(18), dp(8)) })
+            c.addView(label(t("accent")))
+            addRow(c, swatches(ACCENTS, prefs.getInt("accent", 0)) { i ->
+                setInt("accent", i)
+                go(Screen.APPEARANCE)
+            })
+            addRow(c, switchRow(t("anim"), "anim", true) { go(Screen.APPEARANCE) })
+            addRow(c, switchRow(t("haptic"), "haptic", true) { go(Screen.APPEARANCE) })
+            addRow(c, switchRow(t("show_time"), "time", true) { go(Screen.APPEARANCE) })
+            addRow(c, seekRow(t("bubble_radius"), "radius", 4, 28, 16))
+        }
+    }
+
+    private fun buildPrivacy() {
+        page(t("privacy"), left = backBtn(Screen.SETTINGS)) { c ->
+            val pinOn = pinSet()
+            addRow(c, navRow(t("passcode"), if (pinOn) t("on") else t("off")) {
+                if (pinOn) disablePin() else changePin()
+            })
+            addRow(c, navRow(t("blacklist"), "${t("blocked_count")}: ${blocked().size}") { go(Screen.BLACKLIST) })
+            addRow(c, choiceRow(t("last_seen"), "seenBy", listOf(t("everyone"), t("nobody"), t("contacts_only"))))
+            addRow(c, choiceRow(t("fwd_privacy"), "forwardBy", listOf(t("everyone"), t("nobody"))))
+            addRow(c, choiceRow(t("who_writes"), "whoWrites", listOf(t("nearby_only"), t("contacts_only"))))
+        }
+    }
+
+    private fun buildBlacklist() {
+        page(t("blacklist"), left = backBtn(Screen.PRIVACY)) { c ->
+            val input = EditText(this)
+            input.hint = t("search_hint")
+            input.inputType = InputType.TYPE_CLASS_NUMBER
+            input.setTextColor(textColor)
+            input.setHintTextColor(subColor)
+            c.addView(input, LinearLayout.LayoutParams(-1, -2).apply {
+                leftMargin = dp(16); rightMargin = dp(16); topMargin = dp(12)
+            })
+
+            val addBtn = Button(this)
+            addBtn.text = t("block")
+            addBtn.setTextColor(Color.WHITE)
+            addBtn.isAllCaps = false
+            addBtn.setBackgroundColor(Color.parseColor("#F44336"))
+            addBtn.setOnClickListener {
+                val id = input.text.toString().trim()
+                if (id.isNotEmpty()) {
+                    val s = blocked()
+                    s.add(id)
+                    saveSet("blacklist", s)
+                    go(Screen.BLACKLIST)
+                }
+            }
+            c.addView(addBtn, LinearLayout.LayoutParams(-1, -2).apply {
+                leftMargin = dp(16); rightMargin = dp(16); topMargin = dp(8)
+            })
+
+            val list = blocked().sorted()
+            if (list.isEmpty()) c.addView(emptyText(t("list_empty")))
+            for (id in list) {
+                addRow(c, navRow(nameSpan(id), t("unblock_hint")) {
+                    val s = blocked()
+                    s.remove(id)
+                    saveSet("blacklist", s)
+                    go(Screen.BLACKLIST)
+                })
+            }
+        }
+    }
+
+    private fun buildNotify() {
+        page(t("notifications"), left = backBtn(Screen.SETTINGS)) { c ->
+            addRow(c, seekRow(t("volume"), "volume", 0, 100, 80))
+            addRow(c, switchRow(t("notif_sound"), "notifSound", true) { go(Screen.NOTIFY) })
+            val custom = (prefs.getString("sound", "") ?: "").isNotEmpty()
+            addRow(c, navRow(t("tone"), if (custom) t("custom_word") else t("default_word")) { pickRingtone() })
+        }
+    }
+
+    private fun pickRingtone() {
+        val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION)
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+        startActivityForResult(intent, 42)
+    }
+
+    private fun buildLanguage() {
+        page(t("language"), left = backBtn(Screen.SETTINGS)) { c ->
+            LANGS.forEachIndexed { i, name ->
+                addRow(c, navRow(name, if (i == lang) "✓" else "") {
+                    setInt("langIdx", i)
+                    go(Screen.LANGUAGE)
+                })
+            }
+        }
+    }
+
+    private fun buildFolders() {
+        page(t("folders"), left = backBtn(Screen.SETTINGS)) { c ->
+            addRow(c, navRow(t("chat_all")) { archiveView = false; folderFilter = null; go(Screen.CHATS) })
+            addRow(c, navRow(t("archive")) { archiveView = true; go(Screen.CHATS) })
+
+            c.addView(label(t("own_folders")))
+            val input = EditText(this)
+            input.hint = t("folder_name")
+            input.setTextColor(textColor)
+            input.setHintTextColor(subColor)
+            c.addView(input, LinearLayout.LayoutParams(-1, -2).apply { leftMargin = dp(16); rightMargin = dp(16) })
+
+            val create = Button(this)
+            create.text = t("folder_new")
+            create.setTextColor(Color.WHITE)
+            create.isAllCaps = false
+            create.setBackgroundColor(accent)
+            create.setOnClickListener {
+                val name = input.text.toString().trim()
+                if (name.isNotEmpty()) {
+                    val fmap = folderMap()
+                    if (!fmap.containsKey(name)) {
+                        fmap[name] = mutableSetOf()
+                        saveFolderMap(fmap)
+                    }
+                    go(Screen.FOLDERS)
+                }
+            }
+            c.addView(create, LinearLayout.LayoutParams(-1, -2).apply {
+                leftMargin = dp(16); rightMargin = dp(16); topMargin = dp(8)
+            })
+
+            for (f in folderMap().keys) {
+                addRow(c, navRow(f, t("folder_tap_delete")) { v ->
+                    popup(v, listOf(t("delete") to { deleteFolder(f) }), 0)
+                })
+            }
+        }
+    }
+
+    private fun deleteFolder(name: String) {
+        val fmap = folderMap()
+        fmap.remove(name)
+        saveFolderMap(fmap)
+        if (folderFilter == name) folderFilter = null
+        go(Screen.FOLDERS)
+    }
+
+    // ---------- Настройки в памяти телефона ----------
+    private fun setInt(key: String, v: Int) { prefs.edit().putInt(key, v).apply() }
+    private fun setStr(key: String, v: String) { prefs.edit().putString(key, v).apply() }
+    private fun loadSet(key: String): MutableSet<String> =
+        (prefs.getString(key, "") ?: "").split(",").filter { it.isNotEmpty() }.toMutableSet()
+    private fun saveSet(key: String, s: Set<String>) { prefs.edit().putString(key, s.joinToString(",")).apply() }
+    private fun pinned() = loadSet("pinned")
+    private fun archived() = loadSet("archived")
+    private fun blocked() = loadSet("blacklist")
+    private fun admins() = loadSet("admins")
+    private fun banned() = loadSet("banned")
+    private fun online(id: String) = links.values.contains(id)
+
+    private fun folderMap(): LinkedHashMap<String, MutableSet<String>> {
+        val map = LinkedHashMap<String, MutableSet<String>>()
+        val raw = prefs.getString("fm", "") ?: ""
+        if (raw.isEmpty()) return map
+        val o = JSONObject(raw)
+        o.keys().forEach { k ->
+            val arr = o.getJSONArray(k)
+            val set = mutableSetOf<String>()
+            for (i in 0 until arr.length()) set.add(arr.getString(i))
+            map[k] = set
+        }
+        return map
+    }
+
+    private fun saveFolderMap(map: Map<String, Set<String>>) {
+        val o = JSONObject()
+        for ((k, v) in map) o.put(k, JSONArray(v.toList()))
+        prefs.edit().putString("fm", o.toString()).apply()
+    }
+
+    // ---------- Сохранение переписки ----------
+    private fun msgToJson(m: Msg): JSONObject = JSONObject()
+        .put("id", m.id).put("from", m.from).put("text", m.text).put("mine", m.mine)
+        .put("read", m.read).put("edited", m.edited).put("reply", m.reply)
+        .put("fwd", m.fwd).put("unread", m.unread).put("img", m.img).put("time", m.time)
+
+    private fun msgFromJson(o: JSONObject): Msg = Msg(
+        id = o.getString("id"), from = o.getString("from"), text = o.getString("text"),
+        mine = o.getBoolean("mine"), read = o.optBoolean("read"), edited = o.optBoolean("edited"),
+        reply = o.optString("reply"), fwd = o.optString("fwd"), unread = o.optBoolean("unread"),
+        img = o.optString("img"), time = o.optLong("time", System.currentTimeMillis())
+    )
+
+    private fun saveChats() {
+        val arr = JSONArray()
+        for ((peer, list) in chats) {
+            val msgs = JSONArray()
+            list.forEach { msgs.put(msgToJson(it)) }
+            arr.put(JSONObject().put("peer", peer).put("msgs", msgs))
+        }
+        prefs.edit().putString("chats", arr.toString()).apply()
+    }
+
+    private fun loadChats() {
+        val raw = prefs.getString("chats", "") ?: ""
+        if (raw.isEmpty()) return
+        try {
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val msgs = o.getJSONArray("msgs")
+                val list = mutableListOf<Msg>()
+                for (j in 0 until msgs.length()) list.add(msgFromJson(msgs.getJSONObject(j)))
+                chats[o.getString("peer")] = list
+            }
+        } catch (e: Exception) {
+            // повреждённые данные пропускаем
+        }
+    }
+
+    // ---------- Пакеты ----------
+    private fun newPacket(type: String, to: String): JSONObject = JSONObject()
+        .put("id", UUID.randomUUID().toString())
+        .put("type", type)
+        .put("from", myId)
+        .put("to", to)
+        .put("ttl", 6)
+
+    private fun sendPacket(p: JSONObject) {
+        seen.add(p.getString("id"))
+        forward(p, null)
+    }
+
+    // Админ-команда рассылается всем. Принимается только с правильным кодом.
+    private fun sendAdminCmd(action: String, target: String, value: String) {
+        val p = newPacket("adm", "*")
+            .put("action", action)
+            .put("target", target)
+            .put("value", value)
+            .put("code", ADMIN_CODE)
+        sendPacket(p)
+    }
+
+    // Новому соседу передаём текущих админов и баны
+    private fun sendAdminCmdTo(endpointId: String, action: String, target: String, value: String) {
+        val p = newPacket("adm", "*")
+            .put("action", action)
+            .put("target", target)
+            .put("value", value)
+            .put("code", ADMIN_CODE)
+        client.sendPayload(endpointId, Payload.fromBytes(p.toString().toByteArray()))
+    }
+
+    private fun syncAdmins(endpointId: String) {
+        for (id in admins()) sendAdminCmdTo(endpointId, "admin", id, "on")
+        for (id in banned()) sendAdminCmdTo(endpointId, "ban", id, "on")
+    }
+
+    private fun sendMessage(peer: String, text: String, reply: String, fwd: String) {
+        if (banned().contains(myId)) {
+            toast(t("you_banned"))
+            return
+        }
+        val p = newPacket("msg", peer)
+            .put("text", text)
+            .put("reply", reply)
+            .put("fwd", fwd)
+        addMsg(peer, Msg(id = p.getString("id"), from = myId, text = text, mine = true, reply = reply, fwd = fwd))
+        sendPacket(p)
+        refreshLive()
+    }
+
+    private fun receiveMessage(p: JSONObject, from: String) {
+        val msg = Msg(
+            id = p.getString("id"), from = from, text = p.getString("text"), mine = false,
+            reply = p.optString("reply"), fwd = p.optString("fwd"), unread = true
+        )
+        addMsg(from, msg)
+        if (!(screen == Screen.CHAT && openPeer == from)) notify(from, msg.text)
+    }
+
+    // Переносим чат в конец, чтобы самые свежие были сверху
+    private fun addMsg(peer: String, m: Msg) {
+        val list = chats.remove(peer) ?: mutableListOf()
+        list.add(m)
+        chats[peer] = list
+    }
+
+    private fun handleIncoming(fromEndpoint: String, p: JSONObject) {
+        val id = p.getString("id")
+        if (!seen.add(id)) return
+        val type = p.getString("type")
+
+        if (type == "photo") {
+            val fid = p.getLong("fileId")
+            metaByFile[fid] = Pair(fromEndpoint, p)
+            tryPhoto(fid)
+            return
+        }
+
+        if (type == "adm") {
+            if (p.optString("code") == ADMIN_CODE) {
+                applyAdmin(p.getString("action"), p.getString("target"), p.getString("value"))
+                refreshLive()
+            }
+        } else {
+            val from = p.getString("from")
+            if (p.getString("to") == myId && from !in banned() && from !in blocked()) {
+                when (type) {
+                    "msg" -> receiveMessage(p, from)
+                    "edit" -> {
+                        val target = p.getString("target")
+                        chats[from]?.firstOrNull { it.id == target }?.let {
+                            it.text = p.getString("text")
+                            it.edited = true
+                        }
+                    }
+                    "del" -> {
+                        val target = p.getString("target")
+                        chats[from]?.removeAll { it.id == target }
+                    }
+                    "read" -> {
+                        val ids = p.getJSONArray("ids")
+                        for (i in 0 until ids.length()) {
+                            val target = ids.getString(i)
+                            chats[from]?.firstOrNull { it.id == target }?.read = true
+                        }
+                    }
+                }
+                refreshLive()
+            }
+        }
+        relay(p, fromEndpoint)
+    }
+
+    private fun relay(p: JSONObject, from: String?) {
+        val ttl = p.optInt("ttl", 0)
+        if (ttl > 1) forward(JSONObject(p.toString()).put("ttl", ttl - 1), from)
+    }
+
+    // Фото приходит двумя частями: описание (пакет) и файл. Собираем, когда есть обе и передача завершена.
+    private fun tryPhoto(fid: Long) {
+        val (ep, p) = metaByFile[fid] ?: return
+        val (fep, file) = readyFiles[fid] ?: return
+        metaByFile.remove(fid)
+        readyFiles.remove(fid)
+        try {
+            val id = p.getString("id")
+            val dir = File(filesDir, "img").apply { mkdirs() }
+            val local = File(dir, "$id.jpg")
+            file.copyTo(local, overwrite = true)
+
+            val from = p.getString("from")
+            val to = p.getString("to")
+            val ttl = p.getInt("ttl")
+
+            if (to == myId && from !in banned() && from !in blocked()) {
+                addMsg(from, Msg(
+                    id = id, from = from, text = "", mine = false,
+                    reply = p.optString("reply"), fwd = p.optString("fwd"),
+                    unread = true, img = local.absolutePath
+                ))
+                refreshLive()
+                if (!(screen == Screen.CHAT && openPeer == from)) notify(from, t("photo"))
+            }
+
+            if (ttl > 1) {
+                val np = JSONObject(p.toString()).put("ttl", ttl - 1)
+                val fp = Payload.fromFile(local)
+                np.put("fileId", fp.id)
+                forward(np, ep)
+                val others = links.keys.filter { it != fep }
+                if (others.isNotEmpty()) client.sendPayload(others, fp)
+            }
+        } catch (e: Exception) {
+            toast(t("net_err"))
+        }
+    }
+
+    // Пересылка всем соседям, кроме того, от кого пришёл пакет
+    private fun forward(p: JSONObject, except: String?) {
+        val bytes = p.toString().toByteArray()
+        for (ep in links.keys.toList()) {
+            if (ep != except) client.sendPayload(ep, Payload.fromBytes(bytes))
+        }
+    }
+
+    private fun notify(from: String, text: String) {
+        toast("@$from: $text")
+        if (!prefs.getBoolean("notifSound", true)) return
+        val saved = prefs.getString("sound", "") ?: ""
+        val uri = if (saved.isEmpty()) {
+            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        } else {
+            Uri.parse(saved)
+        }
+        val r = RingtoneManager.getRingtone(this, uri) ?: return
+        if (Build.VERSION.SDK_INT >= 28) r.volume = prefs.getInt("volume", 80) / 100f
+        r.play()
+    }
+
+    // ---------- Админ-команды ----------
+    private fun applyAdmin(action: String, target: String, value: String) {
+        val on = value == "on"
+        when (action) {
+            "ban" -> {
+                val s = banned()
+                if (on) s.add(target) else s.remove(target)
+                saveSet("banned", s)
+                if (on) dropEndpointsOf(target)
+                if (on && target == myId) toast(t("you_banned"))
+            }
+            "admin" -> {
+                val s = admins()
+                if (on) s.add(target) else s.remove(target)
+                saveSet("admins", s)
+                if (on && target == myId) toast(t("admin_granted"))
+            }
+            "setid" -> renameId(target, value)
+            "kick" -> dropEndpointsOf(target)
+        }
+    }
+
+    private fun dropEndpointsOf(id: String) {
+        for (ep in links.filterValues { it == id }.keys.toList()) {
+            client.disconnectFromEndpoint(ep)
+        }
+    }
+
+    // Меняем ID везде: в чатах, списках и у самого телефона
+    private fun renameId(old: String, fresh: String) {
+        if (old == fresh || !fresh.matches(Regex("\\d{6}"))) return
+        chats.remove(old)?.let { moved ->
+            val merged = chats.remove(fresh) ?: mutableListOf()
+            merged.addAll(moved)
+            chats[fresh] = merged
+        }
+        for (key in listOf("pinned", "archived", "blacklist", "admins", "banned")) {
+            val s = loadSet(key)
+            if (s.remove(old)) {
+                s.add(fresh)
+                saveSet(key, s)
+            }
+        }
+        for (ep in links.filterValues { it == old }.keys.toList()) links[ep] = fresh
+        if (openPeer == old) openPeer = fresh
+        if (old == myId) {
+            myId = fresh
+            prefs.edit().putString("uid", fresh).apply()
+            startMesh()
+        }
+    }
+
+    // ---------- Сеть (Nearby Connections) ----------
+    private fun startMesh() {
+        client.stopAdvertising()
+        client.stopDiscovery()
+        val options = Strategy.P2P_CLUSTER
+        client.startAdvertising(
+            myId, serviceId, connectionCallback,
+            AdvertisingOptions.Builder().setStrategy(options).build()
+        ).addOnFailureListener { toast(t("net_err")) }
+        client.startDiscovery(
+            serviceId, discoveryCallback,
+            DiscoveryOptions.Builder().setStrategy(options).build()
+        ).addOnFailureListener { toast(t("net_err")) }
+    }
+
+    private fun stopMesh() {
+        client.stopAdvertising()
+        client.stopDiscovery()
+        client.stopAllEndpoints()
+        links.clear()
+        pending.clear()
+        nearby.clear()
+    }
+
+    private val discoveryCallback = object : EndpointDiscoveryCallback() {
+        override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
+            if (info.endpointName in banned()) return
+            ui {
+                nearby[endpointId] = info.endpointName
+                if (endpointId !in links.keys && endpointId !in pending) {
+                    pending.add(endpointId)
+                    client.requestConnection(myId, endpointId, connectionCallback)
+                        .addOnFailureListener { pending.remove(endpointId) }
+                }
+                refreshLive()
+            }
+        }
+
+        override fun onEndpointLost(endpointId: String) {
+            ui {
+                nearby.remove(endpointId)
+                refreshLive()
+            }
+        }
+    }
+
+    private val connectionCallback = object : ConnectionLifecycleCallback() {
+        override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
+            if (info.endpointName in banned()) {
+                client.rejectConnection(endpointId)
+                return
+            }
+            ui { nearby[endpointId] = info.endpointName }
+            client.acceptConnection(endpointId, payloadCallback)
+        }
+
+        override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
+            ui {
+                pending.remove(endpointId)
+                if (result.status.isSuccess) {
+                    links[endpointId] = nearby[endpointId] ?: endpointId
+                    if (isAdmin) syncAdmins(endpointId)
+                }
+                refreshLive()
+            }
+        }
+
+        override fun onDisconnected(endpointId: String) {
+            ui {
+                links.remove(endpointId)
+                pending.remove(endpointId)
+                refreshLive()
+            }
+        }
+    }
+
+    private val payloadCallback = object : PayloadCallback() {
+        override fun onPayloadReceived(endpointId: String, payload: Payload) {
+            if (payload.type == Payload.Type.FILE) {
+                val file = payload.asFile()?.asJavaFile() ?: return
+                ui { pendingFiles[payload.id] = Pair(endpointId, file) }
+                return
+            }
+            val bytes = payload.asBytes() ?: return
+            ui {
+                try {
+                    handleIncoming(endpointId, JSONObject(String(bytes)))
+                } catch (e: Exception) {
+                    // пакет не разобран, пропускаем
+                }
+            }
+        }
+
+        override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {
+            ui {
+                when (update.status) {
+                    PayloadTransferUpdate.Status.SUCCESS -> {
+                        pendingFiles.remove(update.payloadId)?.let { readyFiles[update.payloadId] = it }
+                        tryPhoto(update.payloadId)
+                    }
+                    PayloadTransferUpdate.Status.FAILURE, PayloadTransferUpdate.Status.CANCELED -> {
+                        pendingFiles.remove(update.payloadId)
+                        metaByFile.remove(update.payloadId)
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+}
